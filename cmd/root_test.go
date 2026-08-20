@@ -136,6 +136,41 @@ func TestGetCmdUint64BEKey(t *testing.T) {
 	}
 }
 
+func TestGetCmdGuessesUint64BEKeyFormat(t *testing.T) {
+	path := seedDB(t, "users", []byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("admin"))
+
+	out, err := run(t, "", "get", "--db", path, "users", "1")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.TrimSpace(out) != "admin" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestGetCmdExplicitKeyFormatOverridesGuess(t *testing.T) {
+	path := seedDB(t, "users", []byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("admin"))
+
+	// The bucket's keys look like uint64-be, but an explicit --key-format
+	// text should still win over the guess.
+	_, err := run(t, "", "get", "--key-format", "text", "--db", path, "users", "1")
+	if err == nil {
+		t.Fatalf("expected error looking up literal text key %q, got none", "1")
+	}
+}
+
+func TestGetCmdGuessesTextKeyFormat(t *testing.T) {
+	path := newTestDB(t)
+
+	out, err := run(t, "", "get", "--db", path, "greeting", "hello")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.TrimSpace(out) != "world" {
+		t.Fatalf("got %q", out)
+	}
+}
+
 func TestListBucketsCmdUsesEnvVarWhenNoFlagOrArg(t *testing.T) {
 	path := newTestDB(t)
 	t.Setenv("BOLTDB_CLI_PATH", path)

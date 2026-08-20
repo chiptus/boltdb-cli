@@ -69,6 +69,93 @@ func TestListKeysMissingBucket(t *testing.T) {
 	}
 }
 
+func TestGuessKeyFormatUint64BE(t *testing.T) {
+	path := seedBucket(t, "teams", []byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("team-1"))
+
+	got, err := boltio.GuessKeyFormat(path, "teams")
+	if err != nil {
+		t.Fatalf("GuessKeyFormat: %v", err)
+	}
+	if got != "uint64-be" {
+		t.Fatalf("got %q, want uint64-be", got)
+	}
+}
+
+func TestGuessKeyFormatText(t *testing.T) {
+	path := newTestDB(t)
+
+	got, err := boltio.GuessKeyFormat(path, "version")
+	if err != nil {
+		t.Fatalf("GuessKeyFormat: %v", err)
+	}
+	if got != "text" {
+		t.Fatalf("got %q, want text", got)
+	}
+}
+
+func TestGuessKeyFormatEightByteTextKeyStillGuessesText(t *testing.T) {
+	path := seedBucket(t, "codes", []byte("ABCDEFGH"), []byte("value"))
+
+	got, err := boltio.GuessKeyFormat(path, "codes")
+	if err != nil {
+		t.Fatalf("GuessKeyFormat: %v", err)
+	}
+	if got != "text" {
+		t.Fatalf("got %q, want text", got)
+	}
+}
+
+func TestGuessKeyFormatEmptyBucket(t *testing.T) {
+	path := newTestDB(t)
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte("empty"))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	got, err := boltio.GuessKeyFormat(path, "empty")
+	if err != nil {
+		t.Fatalf("GuessKeyFormat: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want empty guess for an empty bucket", got)
+	}
+}
+
+// seedBucket creates a temp bbolt file with a single bucket/key/value seeded.
+func seedBucket(t *testing.T, bucket string, key, value []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	err = db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(bucket))
+		if err != nil {
+			return err
+		}
+		return b.Put(key, value)
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return path
+}
+
 func TestGet(t *testing.T) {
 	path := newTestDB(t)
 

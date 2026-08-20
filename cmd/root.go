@@ -79,7 +79,22 @@ func decodeValue(s string, format string) ([]byte, error) {
 }
 
 const formatFlagUsage = "value format: text, base64, hex, or uint64-be"
-const keyFormatFlagUsage = "key format: text, base64, hex, or uint64-be (Portainer's NextSequence() keys)"
+const keyFormatFlagUsage = "key format: text, base64, hex, or uint64-be (Portainer's NextSequence() keys); guessed from the bucket's existing keys if unset"
+
+// resolveKeyFormat returns keyFormat as given if the user set --key-format
+// to something, otherwise it guesses a format from the bucket's existing
+// keys (see boltio.GuessKeyFormat), falling back to "text" if the bucket is
+// empty, unreadable, or its keys don't clearly fit one format.
+func resolveKeyFormat(path, bucket, keyFormat string) string {
+	if keyFormat != "" {
+		return keyFormat
+	}
+	guess, err := boltio.GuessKeyFormat(path, bucket)
+	if err != nil || guess == "" {
+		return "text"
+	}
+	return guess
+}
 
 // writeFlags holds the --dry-run/--yes flags shared by every command that
 // writes through boltio.Put, and builds the WriteOptions they map to.
@@ -196,7 +211,7 @@ func newGetCmd() *cobra.Command {
 			}
 			bucket, rawKey := args[0], args[1]
 
-			key, err := decodeValue(rawKey, keyFormat)
+			key, err := decodeValue(rawKey, resolveKeyFormat(path, bucket, keyFormat))
 			if err != nil {
 				return fmt.Errorf("decode key: %w", err)
 			}
@@ -217,7 +232,7 @@ func newGetCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)
-	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
+	c.Flags().StringVar(&keyFormat, "key-format", "", keyFormatFlagUsage)
 	return c
 }
 
@@ -236,7 +251,7 @@ func newPutCmd() *cobra.Command {
 			}
 			bucket, rawKey, rawValue := args[0], args[1], args[2]
 
-			key, err := decodeValue(rawKey, keyFormat)
+			key, err := decodeValue(rawKey, resolveKeyFormat(path, bucket, keyFormat))
 			if err != nil {
 				return fmt.Errorf("decode key: %w", err)
 			}
@@ -252,7 +267,7 @@ func newPutCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)
-	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
+	c.Flags().StringVar(&keyFormat, "key-format", "", keyFormatFlagUsage)
 	wf.register(c)
 	return c
 }
@@ -275,7 +290,7 @@ func newGetSchemaCmd() *cobra.Command {
 
 			var sampleKey string
 			if cmd.Flags().Changed("key") {
-				decoded, err := decodeValue(key, keyFormat)
+				decoded, err := decodeValue(key, resolveKeyFormat(path, bucket, keyFormat))
 				if err != nil {
 					return fmt.Errorf("decode key: %w", err)
 				}
@@ -290,7 +305,7 @@ func newGetSchemaCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&key, "key", "", "sample this specific key instead of the bucket's first key")
-	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
+	c.Flags().StringVar(&keyFormat, "key-format", "", keyFormatFlagUsage)
 	c.Flags().StringVar(&format, "format", "text", schemaFormatFlagUsage)
 	return c
 }
@@ -414,7 +429,7 @@ func newPatchCmd() *cobra.Command {
 			}
 			bucket, rawKey, fragment := args[0], args[1], args[2]
 
-			key, err := decodeValue(rawKey, keyFormat)
+			key, err := decodeValue(rawKey, resolveKeyFormat(path, bucket, keyFormat))
 			if err != nil {
 				return fmt.Errorf("decode key: %w", err)
 			}
@@ -435,7 +450,7 @@ func newPatchCmd() *cobra.Command {
 			return err
 		},
 	}
-	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
+	c.Flags().StringVar(&keyFormat, "key-format", "", keyFormatFlagUsage)
 	wf.register(c)
 	return c
 }
