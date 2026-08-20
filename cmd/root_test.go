@@ -348,3 +348,98 @@ func TestPatchCmdKeyFormatUint64BE(t *testing.T) {
 		t.Fatalf("got %q", out)
 	}
 }
+
+func TestGetSchemaCmdDefaultKey(t *testing.T) {
+	path := newTestDBWithJSON(t)
+
+	out, err := run(t, "", "get-schema", "--db", path, "version")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !strings.Contains(out, `inferred from key "VERSION"`) {
+		t.Fatalf("expected sample-caveat header, got %q", out)
+	}
+	if !strings.Contains(out, "SchemaVersion: string") {
+		t.Fatalf("expected SchemaVersion: string, got %q", out)
+	}
+	if !strings.Contains(out, "Edition: number") {
+		t.Fatalf("expected Edition: number, got %q", out)
+	}
+}
+
+func TestGetSchemaCmdFormatJSON(t *testing.T) {
+	path := newTestDBWithJSON(t)
+
+	out, err := run(t, "", "get-schema", "--format", "json", "--db", path, "version")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.TrimSpace(out) != `{"Edition":"number","SchemaVersion":"string"}` {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestGetSchemaCmdKeyFlag(t *testing.T) {
+	path := newTestDBWithJSON(t)
+	_, err := run(t, "", "put", "--yes", "--db", path, "version", "OTHER", `{"X":"y"}`)
+	if err != nil {
+		t.Fatalf("seed put: %v", err)
+	}
+
+	out, err := run(t, "", "get-schema", "--key", "OTHER", "--db", path, "version")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !strings.Contains(out, `inferred from key "OTHER"`) {
+		t.Fatalf("expected header naming OTHER, got %q", out)
+	}
+	if !strings.Contains(out, "X: string") {
+		t.Fatalf("expected X: string, got %q", out)
+	}
+}
+
+func TestGetSchemaCmdKeyFormatUint64BE(t *testing.T) {
+	path := seedDB(t, "teams", []byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte(`{"Name":"team-1"}`))
+
+	out, err := run(t, "", "get-schema", "--key", "1", "--key-format", "uint64-be", "--db", path, "teams")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !strings.Contains(out, "Name: string") {
+		t.Fatalf("expected Name: string, got %q", out)
+	}
+}
+
+func TestGetSchemaCmdNotJSON(t *testing.T) {
+	path := seedDB(t, "bucket", []byte("key"), []byte("plain text"))
+
+	out, err := run(t, "", "get-schema", "--db", path, "bucket")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !strings.Contains(out, "not JSON") {
+		t.Fatalf("expected not-JSON message, got %q", out)
+	}
+}
+
+func TestGetSchemaCmdNotJSONFormatJSON(t *testing.T) {
+	path := seedDB(t, "bucket", []byte("key"), []byte("plain text"))
+
+	out, err := run(t, "", "get-schema", "--format", "json", "--db", path, "bucket")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	want := `{"bucket":"bucket","notJSON":true,"rawByteLen":10,"sampleKey":"key"}`
+	if strings.TrimSpace(out) != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+}
+
+func TestGetSchemaCmdMissingBucketErrors(t *testing.T) {
+	path := newTestDBWithJSON(t)
+
+	_, err := run(t, "", "get-schema", "--db", path, "does-not-exist")
+	if err == nil {
+		t.Fatal("expected error for missing bucket")
+	}
+}

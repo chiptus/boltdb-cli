@@ -243,6 +243,217 @@ func Patch(path, bucket, key string, fragment []byte, opts WriteOptions) (PutRes
 	return Put(path, bucket, key, merged, opts)
 }
 
+// fallbackScanLimit bounds how many additional keys GetSchema will check,
+// in total, when trying to resolve ambiguous fields to a concrete type.
+const fallbackScanLimit = 20
+
+// Shape describes the inferred type of a single JSON value: a scalar kind
+// ("string", "number", "bool", "null"), "object" (with Fields populated),
+// or "array" (with Elem describing the first element's shape, nil for an
+// empty array).
+type Shape struct {
+	Kind   string
+	Fields map[string]Shape
+	Elem   *Shape
+
+	// ResolvedKey is set when this shape started out ambiguous (null, or
+	// an empty array) in the primary sample and was resolved by scanning
+	// another key in the bucket for a concrete value at the same field.
+	ResolvedKey string
+}
+
+// GetSchemaResult is the result of inferring a bucket's shape from a sample value.
+type GetSchemaResult struct {
+	Bucket     string
+	SampleKey  string
+	NotJSON    bool
+	RawByteLen int
+	Shape      Shape
+}
+
+// GetSchema infers the field shape of a sample value in bucket, for use as
+// an agent- or human-facing approximation of the bucket's schema (bbolt
+// buckets have no real schema, so this is always inferred from a sample,
+// never a guarantee). If key is empty, the bucket's first key (per
+// ListKeys) is sampled; otherwise the given key is sampled directly.
+//
+// Fields whose sampled value is ambiguous (null, or an empty array) are
+// resolved, when possible, by scanning up to fallbackScanLimit other keys
+// in the bucket for a concrete value at that same field, stopping at the
+// first one found.
+func GetSchema(path, bucket, key string) (GetSchemaResult, error) {
+	keys, err := ListKeys(path, bucket)
+	if err != nil {
+		return GetSchemaResult{}, err
+	}
+	if len(keys) == 0 {
+		return GetSchemaResult{}, fmt.Errorf("bucket %q is empty", bucket)
+	}
+
+	sampleKey := key
+	if sampleKey == "" {
+		sampleKey = keys[0]
+	}
+
+	value, found, err := Get(path, bucket, sampleKey)
+	if err != nil {
+		return GetSchemaResult{}, err
+	}
+	if !found {
+		return GetSchemaResult{}, fmt.Errorf("no value at bucket %q key %q", bucket, sampleKey)
+	}
+
+	var decoded any
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, NotJSON: true, RawByteLen: len(value)}, nil
+	}
+
+	shape := inferShape(decoded)
+	shape = resolveAmbiguousFields(shape, path, bucket, sampleKey, keys)
+
+	return GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, Shape: shape}, nil
+}
+
+// inferShape infers the Shape of a JSON value already decoded via
+// encoding/json into Go's standard any representation: nil, bool, float64,
+// string, []any, or map[string]any — no other type is possible here.
+func inferShape(v any) Shape {
+	switch t := v.(type) {
+	case nil:
+		return Shape{Kind: "null"}
+	case bool:
+		return Shape{Kind: "bool"}
+	case float64:
+		return Shape{Kind: "number"}
+	case string:
+		return Shape{Kind: "string"}
+	case []any:
+		if len(t) == 0 {
+			return Shape{Kind: "array"}
+		}
+		elem := inferShape(t[0])
+		return Shape{Kind: "array", Elem: &elem}
+	case map[string]any:
+		fields := make(map[string]Shape, len(t))
+		for k, fv := range t {
+			fields[k] = inferShape(fv)
+		}
+		return Shape{Kind: "object", Fields: fields}
+	}
+	panic(fmt.Sprintf("inferShape: unexpected decoded JSON type %T", v))
+}
+
+// isAmbiguousShape reports whether s carries no useful type information on
+// its own: a null value, or an empty array.
+func isAmbiguousShape(s Shape) bool {
+	return s.Kind == "null" || (s.Kind == "array" && s.Elem == nil)
+}
+
+// resolveAmbiguousFields finds every ambiguous field in shape (recursively,
+// through nested objects) and resolves as many as it can in a single
+// shared scan of up to fallbackScanLimit other keys in the bucket: each
+// candidate key's value is fetched and decoded once, then checked against
+// every field still unresolved, stopping early once none remain.
+func resolveAmbiguousFields(shape Shape, dbPath, bucket, sampleKey string, keys []string) Shape {
+	remaining := collectAmbiguousPaths(shape, nil)
+	if len(remaining) == 0 {
+		return shape
+	}
+
+	checked := 0
+	for _, k := range keys {
+		if len(remaining) == 0 || checked >= fallbackScanLimit {
+			break
+		}
+		if k == sampleKey {
+			continue
+		}
+		checked++
+
+		value, found, err := Get(dbPath, bucket, k)
+		if err != nil || !found {
+			continue
+		}
+		var decoded any
+		if err := json.Unmarshal(value, &decoded); err != nil {
+			continue
+		}
+
+		var stillRemaining [][]string
+		for _, fieldPath := range remaining {
+			fieldValue, ok := navigate(decoded, fieldPath)
+			if !ok {
+				stillRemaining = append(stillRemaining, fieldPath)
+				continue
+			}
+			candidate := inferShape(fieldValue)
+			if isAmbiguousShape(candidate) {
+				stillRemaining = append(stillRemaining, fieldPath)
+				continue
+			}
+			candidate.ResolvedKey = k
+			shape = shapeWithFieldAt(shape, fieldPath, candidate)
+		}
+		remaining = stillRemaining
+	}
+
+	return shape
+}
+
+// collectAmbiguousPaths returns the field path (sequence of nested object
+// key names) of every ambiguous field found by walking shape's object
+// fields recursively.
+func collectAmbiguousPaths(shape Shape, path []string) [][]string {
+	if shape.Kind != "object" {
+		return nil
+	}
+	var paths [][]string
+	for name, field := range shape.Fields {
+		fieldPath := append(append([]string(nil), path...), name)
+		if isAmbiguousShape(field) {
+			paths = append(paths, fieldPath)
+		} else {
+			paths = append(paths, collectAmbiguousPaths(field, fieldPath)...)
+		}
+	}
+	return paths
+}
+
+// shapeWithFieldAt returns a copy of shape with the field at path replaced
+// by resolved.
+func shapeWithFieldAt(shape Shape, path []string, resolved Shape) Shape {
+	if len(path) == 0 {
+		return resolved
+	}
+	fields := make(map[string]Shape, len(shape.Fields))
+	for name, field := range shape.Fields {
+		if name == path[0] {
+			field = shapeWithFieldAt(field, path[1:], resolved)
+		}
+		fields[name] = field
+	}
+	shape.Fields = fields
+	return shape
+}
+
+// navigate walks v through a sequence of object field names, returning the
+// value found at path, or ok=false if v isn't shaped like an object at any
+// point along the way.
+func navigate(v any, path []string) (any, bool) {
+	cur := v
+	for _, seg := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = m[seg]
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
 // requireJSONObject returns an error if b is not valid JSON, or is valid
 // JSON but not a JSON object. label identifies b in the error message.
 func requireJSONObject(b []byte, label string) error {

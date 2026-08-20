@@ -7,9 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/chiptus/boltdb-cli/internal/boltio"
 	"github.com/spf13/cobra"
@@ -112,6 +116,7 @@ func NewRootCmd() *cobra.Command {
 		newGetCmd(),
 		newPutCmd(),
 		newPatchCmd(),
+		newGetSchemaCmd(),
 		newPortainerCmd(),
 	)
 
@@ -250,6 +255,148 @@ func newPutCmd() *cobra.Command {
 	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
 	wf.register(c)
 	return c
+}
+
+const schemaFormatFlagUsage = "output format: text (human-readable tree) or json"
+
+func newGetSchemaCmd() *cobra.Command {
+	var key, keyFormat, format string
+
+	c := &cobra.Command{
+		Use:   "get-schema <bucket>",
+		Short: "Infer the field shape of a sample value in a bucket",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := resolveDBPath(cmd)
+			if err != nil {
+				return err
+			}
+			bucket := args[0]
+
+			var sampleKey string
+			if cmd.Flags().Changed("key") {
+				decoded, err := decodeValue(key, keyFormat)
+				if err != nil {
+					return fmt.Errorf("decode key: %w", err)
+				}
+				sampleKey = string(decoded)
+			}
+
+			result, err := boltio.GetSchema(path, bucket, sampleKey)
+			if err != nil {
+				return err
+			}
+			return printSchema(cmd, result, format)
+		},
+	}
+	c.Flags().StringVar(&key, "key", "", "sample this specific key instead of the bucket's first key")
+	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
+	c.Flags().StringVar(&format, "format", "text", schemaFormatFlagUsage)
+	return c
+}
+
+// printSchema renders a GetSchemaResult in the requested format ("text" for
+// a human-readable tree, or "json" for a machine-parseable shape
+// description).
+func printSchema(cmd *cobra.Command, result boltio.GetSchemaResult, format string) error {
+	out := cmd.OutOrStdout()
+
+	switch format {
+	case "", "text":
+		if result.NotJSON {
+			_, err := fmt.Fprintf(out, "bucket %q key %q: not JSON — %d bytes, raw text/binary\n", result.Bucket, result.SampleKey, result.RawByteLen)
+			return err
+		}
+		if _, err := fmt.Fprintf(out, "bucket %q (inferred from key %q, 1 sample)\n", result.Bucket, result.SampleKey); err != nil {
+			return err
+		}
+		return printShapeTree(out, result.Shape, 0)
+	case "json":
+		if result.NotJSON {
+			return json.NewEncoder(out).Encode(map[string]any{
+				"notJSON":    true,
+				"bucket":     result.Bucket,
+				"sampleKey":  result.SampleKey,
+				"rawByteLen": result.RawByteLen,
+			})
+		}
+		return json.NewEncoder(out).Encode(shapeToJSON(result.Shape))
+	default:
+		return fmt.Errorf("unknown format %q (want text or json)", format)
+	}
+}
+
+// shapeTypeLabel renders s's type as a compact label, e.g. "string" or
+// "array<object>". Objects are not expanded here — use printShapeTree or
+// shapeToJSON for their nested fields.
+func shapeTypeLabel(s boltio.Shape) string {
+	if s.Kind != "array" {
+		return s.Kind
+	}
+	if s.Elem == nil {
+		return "array<empty>"
+	}
+	return "array<" + shapeTypeLabel(*s.Elem) + ">"
+}
+
+func sortedFieldNames(fields map[string]boltio.Shape) []string {
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// printShapeTree writes s as an indented human-readable tree. Only object
+// fields are recursed into; array element shapes are rendered as a
+// compact label (e.g. "array<object>"), not expanded.
+func printShapeTree(out io.Writer, s boltio.Shape, depth int) error {
+	indent := strings.Repeat("  ", depth)
+	if s.Kind != "object" {
+		_, err := fmt.Fprintf(out, "%s%s\n", indent, shapeTypeLabelWithProvenance(s))
+		return err
+	}
+	for _, name := range sortedFieldNames(s.Fields) {
+		field := s.Fields[name]
+		if field.Kind == "object" {
+			if _, err := fmt.Fprintf(out, "%s%s:\n", indent, name); err != nil {
+				return err
+			}
+			if err := printShapeTree(out, field, depth+1); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(out, "%s%s: %s\n", indent, name, shapeTypeLabelWithProvenance(field)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// shapeTypeLabelWithProvenance appends a note when s's type was resolved
+// via the fallback scan rather than the primary sample.
+func shapeTypeLabelWithProvenance(s boltio.Shape) string {
+	label := shapeTypeLabel(s)
+	if s.ResolvedKey != "" {
+		return fmt.Sprintf("%s (resolved from key %q, ambiguous in sample)", label, s.ResolvedKey)
+	}
+	return label
+}
+
+// shapeToJSON renders s as a value suitable for JSON encoding: nested
+// objects become nested JSON objects, everything else (including arrays)
+// becomes its compact type label string.
+func shapeToJSON(s boltio.Shape) any {
+	if s.Kind != "object" {
+		return shapeTypeLabel(s)
+	}
+	m := make(map[string]any, len(s.Fields))
+	for name, field := range s.Fields {
+		m[name] = shapeToJSON(field)
+	}
+	return m
 }
 
 func newPatchCmd() *cobra.Command {
