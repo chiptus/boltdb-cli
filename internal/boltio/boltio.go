@@ -48,7 +48,7 @@ func ListBuckets(path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var buckets []string
 	err = db.View(func(tx *bolt.Tx) error {
@@ -69,7 +69,7 @@ func ListKeys(path, bucket string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var keys []string
 	err = db.View(func(tx *bolt.Tx) error {
@@ -95,7 +95,7 @@ func Get(path, bucket, key string) (value []byte, found bool, err error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("open %s: %w", path, err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	err = db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucket))
@@ -151,25 +151,39 @@ func Put(path, bucket, key string, value []byte, opts WriteOptions) (PutResult, 
 		}
 	}
 
-	fmt.Fprintf(out, "bucket=%q key=%q\n", bucket, key)
-	if found {
-		fmt.Fprintf(out, "  old: %s\n", render(oldValue))
-	} else {
-		fmt.Fprintf(out, "  old: <absent>\n")
+	if _, err := fmt.Fprintf(out, "bucket=%q key=%q\n", bucket, key); err != nil {
+		return PutResult{}, err
 	}
-	fmt.Fprintf(out, "  new: %s\n", render(value))
+	if found {
+		if _, err := fmt.Fprintf(out, "  old: %s\n", render(oldValue)); err != nil {
+			return PutResult{}, err
+		}
+	} else {
+		if _, err := fmt.Fprintf(out, "  old: <absent>\n"); err != nil {
+			return PutResult{}, err
+		}
+	}
+	if _, err := fmt.Fprintf(out, "  new: %s\n", render(value)); err != nil {
+		return PutResult{}, err
+	}
 
 	if opts.DryRun {
-		fmt.Fprintln(out, "(dry run, no changes written)")
+		if _, err := fmt.Fprintln(out, "(dry run, no changes written)"); err != nil {
+			return PutResult{}, err
+		}
 		return PutResult{}, nil
 	}
 
 	if !opts.Yes {
-		fmt.Fprint(out, "Write this change? [y/N] ")
+		if _, err := fmt.Fprint(out, "Write this change? [y/N] "); err != nil {
+			return PutResult{}, err
+		}
 		reader := bufio.NewReader(in)
 		line, _ := reader.ReadString('\n')
 		if !confirmed(line) {
-			fmt.Fprintln(out, "Aborted, nothing written.")
+			if _, err := fmt.Fprintln(out, "Aborted, nothing written."); err != nil {
+				return PutResult{}, err
+			}
 			return PutResult{}, nil
 		}
 	}
@@ -183,7 +197,7 @@ func Put(path, bucket, key string, value []byte, opts WriteOptions) (PutResult, 
 	if err != nil {
 		return PutResult{}, fmt.Errorf("open %s: %w", path, err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	err = db.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(bucket))
@@ -212,13 +226,13 @@ func backup(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	dst, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return "", err
 	}
-	defer dst.Close()
+	defer func() { _ = dst.Close() }()
 
 	if _, err := io.Copy(dst, src); err != nil {
 		return "", err

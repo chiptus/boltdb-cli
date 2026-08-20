@@ -123,7 +123,9 @@ func printNames(cmd *cobra.Command, names []string, format string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), s)
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), s); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -204,8 +206,8 @@ func newGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), s)
-			return nil
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), s)
+			return err
 		},
 	}
 	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)

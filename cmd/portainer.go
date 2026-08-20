@@ -34,9 +34,9 @@ func newPortainerGetVersionCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "SchemaVersion: %s\nMigratorCount: %d\nEdition: %d\nInstanceID: %s\n",
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "SchemaVersion: %s\nMigratorCount: %d\nEdition: %d\nInstanceID: %s\n",
 				v.SchemaVersion, v.MigratorCount, v.Edition, v.InstanceID)
-			return nil
+			return err
 		},
 	}
 }
