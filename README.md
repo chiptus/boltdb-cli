@@ -24,19 +24,36 @@ is:
    without writing or backing up.
 3. Confirmed interactively before writing, unless `--yes`/`-f` is passed.
 
+## Database path
+
+Every command needs a database path. It's never a positional argument —
+give it either way:
+
+- `--db <path>`, a persistent flag accepted by every command, or
+- the `BOLTDB_CLI_PATH` environment variable, so you can set it once per
+  shell session and drop it from every subsequent invocation:
+
+  ```sh
+  export BOLTDB_CLI_PATH=~/portainer-data/ee/portainer.db
+  boltdb-cli list-buckets
+  boltdb-cli portainer get-version
+  ```
+
+`--db` takes precedence over `BOLTDB_CLI_PATH` when both are set.
+
 ## Usage
 
 ```sh
 # Generic
-boltdb-cli list-buckets <db-path> [--format text|base64|hex|uint64-be]
-boltdb-cli list-keys <db-path> <bucket> [--format text|base64|hex|uint64-be]
-boltdb-cli get <db-path> <bucket> <key> [--key-format ...] [--format ...]
-boltdb-cli put <db-path> <bucket> <key> <value> [--key-format ...] [--format ...] [--dry-run] [--yes|-f]
+boltdb-cli list-buckets [--format text|base64|hex|uint64-be]
+boltdb-cli list-keys <bucket> [--format text|base64|hex|uint64-be]
+boltdb-cli get <bucket> <key> [--key-format ...] [--format ...]
+boltdb-cli put <bucket> <key> <value> [--key-format ...] [--format ...] [--dry-run] [--yes|-f]
 
 # Portainer
-boltdb-cli portainer get-version <db-path>
-boltdb-cli portainer set-version <db-path> [--schema-version X.Y.Z] [--edition N] [--migrator-count N] [--dry-run] [--yes|-f]
-boltdb-cli portainer clear-updating-flag <db-path> [--dry-run] [--yes|-f]
+boltdb-cli portainer get-version
+boltdb-cli portainer set-version [--schema-version X.Y.Z] [--edition N] [--migrator-count N] [--dry-run] [--yes|-f]
+boltdb-cli portainer clear-updating-flag [--dry-run] [--yes|-f]
 ```
 
 Both flags accept `text` (default), `base64`, `hex`, or `uint64-be`.
@@ -56,8 +73,8 @@ buckets (`teams`, `users`, `endpoints`, ...) — to read/write them as plain
 decimal IDs instead of base64/hex, e.g.:
 
 ```sh
-boltdb-cli list-keys --format uint64-be <db-path> users
-boltdb-cli get --key-format uint64-be <db-path> users 1
+boltdb-cli list-keys --format uint64-be users
+boltdb-cli get --key-format uint64-be users 1
 ```
 
 ## Portainer version semantics

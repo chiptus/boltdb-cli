@@ -22,11 +22,15 @@ func newPortainerCmd() *cobra.Command {
 
 func newPortainerGetVersionCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "get-version <db-path>",
+		Use:   "get-version",
 		Short: "Print the stored Portainer schema version",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := portainer.GetVersion(args[0])
+			path, err := resolveDBPath(cmd)
+			if err != nil {
+				return err
+			}
+			v, err := portainer.GetVersion(path)
 			if err != nil {
 				return err
 			}
@@ -43,10 +47,15 @@ func newPortainerSetVersionCmd() *cobra.Command {
 	wf := &writeFlags{}
 
 	c := &cobra.Command{
-		Use:   "set-version <db-path>",
+		Use:   "set-version",
 		Short: "Patch the stored Portainer schema version, edition, or migrator count",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := resolveDBPath(cmd)
+			if err != nil {
+				return err
+			}
+
 			input := portainer.SetVersionInput{}
 			if cmd.Flags().Changed("schema-version") {
 				input.SchemaVersion = &schemaVersion
@@ -58,7 +67,7 @@ func newPortainerSetVersionCmd() *cobra.Command {
 				input.MigratorCount = &migratorCount
 			}
 
-			_, err := portainer.SetVersion(args[0], input, wf.writeOptions(cmd))
+			_, err = portainer.SetVersion(path, input, wf.writeOptions(cmd))
 			return err
 		},
 	}
@@ -73,11 +82,15 @@ func newPortainerClearUpdatingFlagCmd() *cobra.Command {
 	wf := &writeFlags{}
 
 	c := &cobra.Command{
-		Use:   "clear-updating-flag <db-path>",
+		Use:   "clear-updating-flag",
 		Short: "Unstick a database left with DB_UPDATING=true after a crashed migration",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := portainer.ClearUpdatingFlag(args[0], wf.writeOptions(cmd))
+			path, err := resolveDBPath(cmd)
+			if err != nil {
+				return err
+			}
+			_, err = portainer.ClearUpdatingFlag(path, wf.writeOptions(cmd))
 			return err
 		},
 	}

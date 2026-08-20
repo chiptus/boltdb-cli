@@ -49,7 +49,7 @@ func run(t *testing.T, in string, args ...string) (stdout string, err error) {
 func TestListBucketsCmd(t *testing.T) {
 	path := newTestDB(t)
 
-	out, err := run(t, "", "list-buckets", path)
+	out, err := run(t, "", "list-buckets", "--db", path)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestListBucketsCmd(t *testing.T) {
 func TestListKeysCmd(t *testing.T) {
 	path := newTestDB(t)
 
-	out, err := run(t, "", "list-keys", path, "greeting")
+	out, err := run(t, "", "list-keys", "--db", path, "greeting")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestListKeysCmdBase64ForBinaryKeys(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	out, err := run(t, "", "list-keys", "--format", "base64", path, "teams")
+	out, err := run(t, "", "list-keys", "--format", "base64", "--db", path, "teams")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestListKeysCmdUint64BEForSequenceKeys(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	out, err := run(t, "", "list-keys", "--format", "uint64-be", path, "teams")
+	out, err := run(t, "", "list-keys", "--format", "uint64-be", "--db", path, "teams")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestGetCmdUint64BEKey(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	out, err := run(t, "", "get", "--key-format", "uint64-be", path, "users", "1")
+	out, err := run(t, "", "get", "--key-format", "uint64-be", "--db", path, "users", "1")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -158,10 +158,45 @@ func TestGetCmdUint64BEKey(t *testing.T) {
 	}
 }
 
+func TestListBucketsCmdUsesEnvVarWhenNoFlagOrArg(t *testing.T) {
+	path := newTestDB(t)
+	t.Setenv("BOLTDB_CLI_PATH", path)
+
+	out, err := run(t, "", "list-buckets")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.TrimSpace(out) != "greeting" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestListBucketsCmdDbFlagOverridesEnvVar(t *testing.T) {
+	t.Setenv("BOLTDB_CLI_PATH", "/nonexistent/wrong.db")
+	path := newTestDB(t)
+
+	out, err := run(t, "", "list-buckets", "--db", path)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.TrimSpace(out) != "greeting" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestListBucketsCmdErrorsWithNoDbPathSource(t *testing.T) {
+	t.Setenv("BOLTDB_CLI_PATH", "")
+
+	_, err := run(t, "", "list-buckets")
+	if err == nil {
+		t.Fatal("expected an error when no --db flag or BOLTDB_CLI_PATH is set")
+	}
+}
+
 func TestGetCmd(t *testing.T) {
 	path := newTestDB(t)
 
-	out, err := run(t, "", "get", path, "greeting", "hello")
+	out, err := run(t, "", "get", "--db", path, "greeting", "hello")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -173,7 +208,7 @@ func TestGetCmd(t *testing.T) {
 func TestGetCmdBase64(t *testing.T) {
 	path := newTestDB(t)
 
-	out, err := run(t, "", "get", "--format", "base64", path, "greeting", "hello")
+	out, err := run(t, "", "get", "--format", "base64", "--db", path, "greeting", "hello")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -185,12 +220,12 @@ func TestGetCmdBase64(t *testing.T) {
 func TestPutCmdDryRunDoesNotWrite(t *testing.T) {
 	path := newTestDB(t)
 
-	_, err := run(t, "", "put", "--dry-run", path, "greeting", "hello", "changed")
+	_, err := run(t, "", "put", "--dry-run", "--db", path, "greeting", "hello", "changed")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
-	out, err := run(t, "", "get", path, "greeting", "hello")
+	out, err := run(t, "", "get", "--db", path, "greeting", "hello")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -202,12 +237,12 @@ func TestPutCmdDryRunDoesNotWrite(t *testing.T) {
 func TestPutCmdWithYesWrites(t *testing.T) {
 	path := newTestDB(t)
 
-	_, err := run(t, "", "put", "--yes", path, "greeting", "hello", "changed")
+	_, err := run(t, "", "put", "--yes", "--db", path, "greeting", "hello", "changed")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
-	out, err := run(t, "", "get", path, "greeting", "hello")
+	out, err := run(t, "", "get", "--db", path, "greeting", "hello")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -219,12 +254,12 @@ func TestPutCmdWithYesWrites(t *testing.T) {
 func TestPutCmdBase64Roundtrip(t *testing.T) {
 	path := newTestDB(t)
 
-	_, err := run(t, "", "put", "--yes", "--format", "base64", path, "greeting", "hello", "aGVsbG8=")
+	_, err := run(t, "", "put", "--yes", "--format", "base64", "--db", path, "greeting", "hello", "aGVsbG8=")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
-	out, err := run(t, "", "get", path, "greeting", "hello")
+	out, err := run(t, "", "get", "--db", path, "greeting", "hello")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -236,12 +271,12 @@ func TestPutCmdBase64Roundtrip(t *testing.T) {
 func TestPutCmdPromptAbortsWithoutYes(t *testing.T) {
 	path := newTestDB(t)
 
-	_, err := run(t, "n\n", "put", path, "greeting", "hello", "changed")
+	_, err := run(t, "n\n", "put", "--db", path, "greeting", "hello", "changed")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
-	out, err := run(t, "", "get", path, "greeting", "hello")
+	out, err := run(t, "", "get", "--db", path, "greeting", "hello")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

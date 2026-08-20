@@ -8,11 +8,28 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/chiptus/boltdb-cli/internal/boltio"
 	"github.com/spf13/cobra"
 )
+
+// dbPathEnvVar lets a database path be set once per shell session instead
+// of being passed to every invocation.
+const dbPathEnvVar = "BOLTDB_CLI_PATH"
+
+// resolveDBPath returns the database path a command should use: the --db
+// flag if set, else the BOLTDB_CLI_PATH env var.
+func resolveDBPath(cmd *cobra.Command) (string, error) {
+	if dbFlag, _ := cmd.Flags().GetString("db"); dbFlag != "" {
+		return dbFlag, nil
+	}
+	if env := os.Getenv(dbPathEnvVar); env != "" {
+		return env, nil
+	}
+	return "", fmt.Errorf("no database path: use --db or set %s", dbPathEnvVar)
+}
 
 // encodeBytes renders b in the given output format. An empty format means
 // "text" (raw bytes, printed as-is).
@@ -87,6 +104,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "boltdb-cli",
 		Short: "Inspect and patch bbolt database files",
 	}
+	root.PersistentFlags().String("db", "", fmt.Sprintf("path to the bbolt database file (falls back to the %s env var if unset and no db-path argument is given)", dbPathEnvVar))
 
 	root.AddCommand(
 		newListBucketsCmd(),
@@ -114,11 +132,15 @@ func newListBucketsCmd() *cobra.Command {
 	var format string
 
 	c := &cobra.Command{
-		Use:   "list-buckets <db-path>",
+		Use:   "list-buckets",
 		Short: "List every bucket in a bbolt file",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			buckets, err := boltio.ListBuckets(args[0])
+			path, err := resolveDBPath(cmd)
+			if err != nil {
+				return err
+			}
+			buckets, err := boltio.ListBuckets(path)
 			if err != nil {
 				return err
 			}
@@ -133,11 +155,15 @@ func newListKeysCmd() *cobra.Command {
 	var format string
 
 	c := &cobra.Command{
-		Use:   "list-keys <db-path> <bucket>",
+		Use:   "list-keys <bucket>",
 		Short: "List every key in a bucket",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			keys, err := boltio.ListKeys(args[0], args[1])
+			path, err := resolveDBPath(cmd)
+			if err != nil {
+				return err
+			}
+			keys, err := boltio.ListKeys(path, args[0])
 			if err != nil {
 				return err
 			}
@@ -152,21 +178,27 @@ func newGetCmd() *cobra.Command {
 	var format, keyFormat string
 
 	c := &cobra.Command{
-		Use:   "get <db-path> <bucket> <key>",
+		Use:   "get <bucket> <key>",
 		Short: "Print the value stored at bucket/key",
-		Args:  cobra.ExactArgs(3),
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key, err := decodeValue(args[2], keyFormat)
+			path, err := resolveDBPath(cmd)
+			if err != nil {
+				return err
+			}
+			bucket, rawKey := args[0], args[1]
+
+			key, err := decodeValue(rawKey, keyFormat)
 			if err != nil {
 				return fmt.Errorf("decode key: %w", err)
 			}
 
-			val, found, err := boltio.Get(args[0], args[1], string(key))
+			val, found, err := boltio.Get(path, bucket, string(key))
 			if err != nil {
 				return err
 			}
 			if !found {
-				return fmt.Errorf("no value at bucket %q key %q", args[1], args[2])
+				return fmt.Errorf("no value at bucket %q key %q", bucket, rawKey)
 			}
 			s, err := encodeBytes(val, format)
 			if err != nil {
@@ -186,22 +218,28 @@ func newPutCmd() *cobra.Command {
 	wf := &writeFlags{}
 
 	c := &cobra.Command{
-		Use:   "put <db-path> <bucket> <key> <value>",
+		Use:   "put <bucket> <key> <value>",
 		Short: "Write a value at bucket/key",
-		Args:  cobra.ExactArgs(4),
+		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key, err := decodeValue(args[2], keyFormat)
+			path, err := resolveDBPath(cmd)
+			if err != nil {
+				return err
+			}
+			bucket, rawKey, rawValue := args[0], args[1], args[2]
+
+			key, err := decodeValue(rawKey, keyFormat)
 			if err != nil {
 				return fmt.Errorf("decode key: %w", err)
 			}
-			value, err := decodeValue(args[3], format)
+			value, err := decodeValue(rawValue, format)
 			if err != nil {
 				return fmt.Errorf("decode value: %w", err)
 			}
 
 			opts := wf.writeOptions(cmd)
 			opts.Format = format
-			_, err = boltio.Put(args[0], args[1], string(key), value, opts)
+			_, err = boltio.Put(path, bucket, string(key), value, opts)
 			return err
 		},
 	}

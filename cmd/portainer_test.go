@@ -39,7 +39,7 @@ func newTestPortainerDB(t *testing.T) string {
 func TestPortainerGetVersionCmd(t *testing.T) {
 	path := newTestPortainerDB(t)
 
-	out, err := run(t, "", "portainer", "get-version", path)
+	out, err := run(t, "", "portainer", "get-version", "--db", path)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -51,12 +51,12 @@ func TestPortainerGetVersionCmd(t *testing.T) {
 func TestPortainerSetVersionCmdBacksUpBeforeWriting(t *testing.T) {
 	path := newTestPortainerDB(t)
 
-	_, err := run(t, "", "portainer", "set-version", "--yes", "--schema-version", "2.20.0", path)
+	_, err := run(t, "", "portainer", "set-version", "--yes", "--schema-version", "2.20.0", "--db", path)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
-	out, err := run(t, "", "portainer", "get-version", path)
+	out, err := run(t, "", "portainer", "get-version", "--db", path)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestPortainerSetVersionCmdBacksUpBeforeWriting(t *testing.T) {
 func TestPortainerSetVersionCmdRejectsBadSemver(t *testing.T) {
 	path := newTestPortainerDB(t)
 
-	_, err := run(t, "", "portainer", "set-version", "--yes", "--schema-version", "not-a-version", path)
+	_, err := run(t, "", "portainer", "set-version", "--yes", "--schema-version", "not-a-version", "--db", path)
 	if err == nil {
 		t.Fatal("expected error for invalid semver")
 	}
@@ -91,12 +91,12 @@ func TestPortainerSetVersionCmdRejectsBadSemver(t *testing.T) {
 func TestPortainerClearUpdatingFlagCmd(t *testing.T) {
 	path := newTestPortainerDB(t)
 
-	_, err := run(t, "", "portainer", "clear-updating-flag", "--yes", path)
+	_, err := run(t, "", "portainer", "clear-updating-flag", "--yes", "--db", path)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
-	out, err := run(t, "", "get", path, "version", "DB_UPDATING")
+	out, err := run(t, "", "get", "--db", path, "version", "DB_UPDATING")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
