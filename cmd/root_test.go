@@ -91,11 +91,69 @@ func TestListKeysCmdBase64ForBinaryKeys(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	out, err := run(t, "", "list-keys", "--base64", path, "teams")
+	out, err := run(t, "", "list-keys", "--format", "base64", path, "teams")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if strings.TrimSpace(out) != "AAAAAAAAAAE=" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestListKeysCmdUint64BEForSequenceKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	err = db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte("teams"))
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("team-1"))
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	out, err := run(t, "", "list-keys", "--format", "uint64-be", path, "teams")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.TrimSpace(out) != "1" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestGetCmdUint64BEKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	err = db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte("users"))
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("admin"))
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	out, err := run(t, "", "get", "--key-format", "uint64-be", path, "users", "1")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.TrimSpace(out) != "admin" {
 		t.Fatalf("got %q", out)
 	}
 }
@@ -115,7 +173,7 @@ func TestGetCmd(t *testing.T) {
 func TestGetCmdBase64(t *testing.T) {
 	path := newTestDB(t)
 
-	out, err := run(t, "", "get", "--base64", path, "greeting", "hello")
+	out, err := run(t, "", "get", "--format", "base64", path, "greeting", "hello")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -161,7 +219,7 @@ func TestPutCmdWithYesWrites(t *testing.T) {
 func TestPutCmdBase64Roundtrip(t *testing.T) {
 	path := newTestDB(t)
 
-	_, err := run(t, "", "put", "--yes", "--base64", path, "greeting", "hello", "aGVsbG8=")
+	_, err := run(t, "", "put", "--yes", "--format", "base64", path, "greeting", "hello", "aGVsbG8=")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

@@ -28,10 +28,10 @@ is:
 
 ```sh
 # Generic
-boltdb-cli list-buckets <db-path>
-boltdb-cli list-keys <db-path> <bucket>
-boltdb-cli get <db-path> <bucket> <key> [--base64]
-boltdb-cli put <db-path> <bucket> <key> <value> [--base64] [--dry-run] [--yes|-f]
+boltdb-cli list-buckets <db-path> [--format text|base64|hex|uint64-be]
+boltdb-cli list-keys <db-path> <bucket> [--format text|base64|hex|uint64-be]
+boltdb-cli get <db-path> <bucket> <key> [--key-format ...] [--format ...]
+boltdb-cli put <db-path> <bucket> <key> <value> [--key-format ...] [--format ...] [--dry-run] [--yes|-f]
 
 # Portainer
 boltdb-cli portainer get-version <db-path>
@@ -39,8 +39,26 @@ boltdb-cli portainer set-version <db-path> [--schema-version X.Y.Z] [--edition N
 boltdb-cli portainer clear-updating-flag <db-path> [--dry-run] [--yes|-f]
 ```
 
-`--base64` on `get`/`put` encodes/decodes the value as base64, for
-binary-safe round-tripping of values that aren't plain text.
+Both flags accept `text` (default), `base64`, `hex`, or `uint64-be`.
+
+- On `list-buckets`/`list-keys`, `--format` controls how the listed
+  bucket/key names are printed.
+- On `get`/`put`, `--key-format` controls how the `<key>` argument is
+  decoded (it's always plain text on the command line, decoded to raw bytes
+  before the lookup/write), and `--format` controls how the value is
+  encoded (`get`, and previews) or decoded (`put`) — independently, since a
+  bucket's keys and values are often encoded differently.
+
+Use `base64`/`hex` for binary-safe round-tripping of values that aren't
+plain text. Use `uint64-be` for keys that are bbolt `NextSequence()`-derived
+8-byte big-endian integers — this is how Portainer keys most entity
+buckets (`teams`, `users`, `endpoints`, ...) — to read/write them as plain
+decimal IDs instead of base64/hex, e.g.:
+
+```sh
+boltdb-cli list-keys --format uint64-be <db-path> users
+boltdb-cli get --key-format uint64-be <db-path> users 1
+```
 
 ## Portainer version semantics
 

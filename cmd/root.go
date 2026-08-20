@@ -5,11 +5,60 @@ package cmd
 
 import (
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	"github.com/chiptus/boltdb-cli/internal/boltio"
 	"github.com/spf13/cobra"
 )
+
+// encodeBytes renders b in the given output format. An empty format means
+// "text" (raw bytes, printed as-is).
+func encodeBytes(b []byte, format string) (string, error) {
+	switch format {
+	case "", "text":
+		return string(b), nil
+	case "base64":
+		return base64.StdEncoding.EncodeToString(b), nil
+	case "hex":
+		return hex.EncodeToString(b), nil
+	case "uint64-be":
+		if len(b) != 8 {
+			return "", fmt.Errorf("uint64-be format: value is %d bytes, want 8", len(b))
+		}
+		return strconv.FormatUint(binary.BigEndian.Uint64(b), 10), nil
+	default:
+		return "", fmt.Errorf("unknown format %q (want text, base64, hex, or uint64-be)", format)
+	}
+}
+
+// decodeValue parses s according to format into raw bytes, the inverse of
+// encodeBytes, for commands that take a value/key on the command line.
+func decodeValue(s string, format string) ([]byte, error) {
+	switch format {
+	case "", "text":
+		return []byte(s), nil
+	case "base64":
+		return base64.StdEncoding.DecodeString(s)
+	case "hex":
+		return hex.DecodeString(s)
+	case "uint64-be":
+		n, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("uint64-be format: %w", err)
+		}
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf, n)
+		return buf, nil
+	default:
+		return nil, fmt.Errorf("unknown format %q (want text, base64, hex, or uint64-be)", format)
+	}
+}
+
+const formatFlagUsage = "value format: text, base64, hex, or uint64-be"
+const keyFormatFlagUsage = "key format: text, base64, hex, or uint64-be (Portainer's NextSequence() keys)"
 
 // writeFlags holds the --dry-run/--yes flags shared by every command that
 // writes through boltio.Put, and builds the WriteOptions they map to.
@@ -50,18 +99,19 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
-func printNames(cmd *cobra.Command, names []string, useBase64 bool) {
+func printNames(cmd *cobra.Command, names []string, format string) error {
 	for _, n := range names {
-		if useBase64 {
-			fmt.Fprintln(cmd.OutOrStdout(), base64.StdEncoding.EncodeToString([]byte(n)))
-		} else {
-			fmt.Fprintln(cmd.OutOrStdout(), n)
+		s, err := encodeBytes([]byte(n), format)
+		if err != nil {
+			return err
 		}
+		fmt.Fprintln(cmd.OutOrStdout(), s)
 	}
+	return nil
 }
 
 func newListBucketsCmd() *cobra.Command {
-	var useBase64 bool
+	var format string
 
 	c := &cobra.Command{
 		Use:   "list-buckets <db-path>",
@@ -72,16 +122,15 @@ func newListBucketsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printNames(cmd, buckets, useBase64)
-			return nil
+			return printNames(cmd, buckets, format)
 		},
 	}
-	c.Flags().BoolVar(&useBase64, "base64", false, "print bucket names as base64 (for non-UTF8 bucket names)")
+	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)
 	return c
 }
 
 func newListKeysCmd() *cobra.Command {
-	var useBase64 bool
+	var format string
 
 	c := &cobra.Command{
 		Use:   "list-keys <db-path> <bucket>",
@@ -92,43 +141,48 @@ func newListKeysCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printNames(cmd, keys, useBase64)
-			return nil
+			return printNames(cmd, keys, format)
 		},
 	}
-	c.Flags().BoolVar(&useBase64, "base64", false, "print keys as base64 (many bbolt keys, e.g. Portainer's sequence IDs, are binary, not text)")
+	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)
 	return c
 }
 
 func newGetCmd() *cobra.Command {
-	var useBase64 bool
+	var format, keyFormat string
 
 	c := &cobra.Command{
 		Use:   "get <db-path> <bucket> <key>",
 		Short: "Print the value stored at bucket/key",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			val, found, err := boltio.Get(args[0], args[1], args[2])
+			key, err := decodeValue(args[2], keyFormat)
+			if err != nil {
+				return fmt.Errorf("decode key: %w", err)
+			}
+
+			val, found, err := boltio.Get(args[0], args[1], string(key))
 			if err != nil {
 				return err
 			}
 			if !found {
 				return fmt.Errorf("no value at bucket %q key %q", args[1], args[2])
 			}
-			if useBase64 {
-				fmt.Fprintln(cmd.OutOrStdout(), base64.StdEncoding.EncodeToString(val))
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), string(val))
+			s, err := encodeBytes(val, format)
+			if err != nil {
+				return err
 			}
+			fmt.Fprintln(cmd.OutOrStdout(), s)
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&useBase64, "base64", false, "encode the output as base64 (for binary-safe values)")
+	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)
+	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
 	return c
 }
 
 func newPutCmd() *cobra.Command {
-	var useBase64 bool
+	var format, keyFormat string
 	wf := &writeFlags{}
 
 	c := &cobra.Command{
@@ -136,22 +190,23 @@ func newPutCmd() *cobra.Command {
 		Short: "Write a value at bucket/key",
 		Args:  cobra.ExactArgs(4),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			value := []byte(args[3])
-			if useBase64 {
-				decoded, err := base64.StdEncoding.DecodeString(args[3])
-				if err != nil {
-					return fmt.Errorf("decode base64 value: %w", err)
-				}
-				value = decoded
+			key, err := decodeValue(args[2], keyFormat)
+			if err != nil {
+				return fmt.Errorf("decode key: %w", err)
+			}
+			value, err := decodeValue(args[3], format)
+			if err != nil {
+				return fmt.Errorf("decode value: %w", err)
 			}
 
 			opts := wf.writeOptions(cmd)
-			opts.Base64 = useBase64
-			_, err := boltio.Put(args[0], args[1], args[2], value, opts)
+			opts.Format = format
+			_, err = boltio.Put(args[0], args[1], string(key), value, opts)
 			return err
 		},
 	}
-	c.Flags().BoolVar(&useBase64, "base64", false, "decode <value> as base64 (for binary-safe values)")
+	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)
+	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
 	wf.register(c)
 	return c
 }

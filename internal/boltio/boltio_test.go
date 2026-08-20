@@ -224,7 +224,7 @@ func TestPutDryRunPreviewIsBase64WhenRequested(t *testing.T) {
 	binary := []byte{0xff, 0x00, 0xfe}
 	_, err := boltio.Put(path, "version", "BINARY", binary, boltio.WriteOptions{
 		DryRun: true,
-		Base64: true,
+		Format: "base64",
 		Out:    out,
 	})
 	if err != nil {

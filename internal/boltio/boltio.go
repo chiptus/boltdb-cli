@@ -6,9 +6,12 @@ package boltio
 import (
 	"bufio"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,9 +24,10 @@ type WriteOptions struct {
 	DryRun bool
 	// Yes skips the interactive confirmation prompt.
 	Yes bool
-	// Base64 renders the old/new preview as base64 instead of raw text,
-	// so binary values don't print as garbled bytes.
-	Base64 bool
+	// Format renders the old/new preview in this format instead of raw
+	// text, so binary values don't print as garbled bytes. One of "",
+	// "text", "base64", "hex", or "uint64-be". Empty means "text".
+	Format string
 	// In is read for the confirmation prompt response. Defaults to os.Stdin.
 	In io.Reader
 	// Out receives the preview/prompt text. Defaults to os.Stdout.
@@ -132,10 +136,19 @@ func Put(path, bucket, key string, value []byte, opts WriteOptions) (PutResult, 
 	}
 
 	render := func(v []byte) string {
-		if opts.Base64 {
+		switch opts.Format {
+		case "base64":
 			return base64.StdEncoding.EncodeToString(v)
+		case "hex":
+			return hex.EncodeToString(v)
+		case "uint64-be":
+			if len(v) != 8 {
+				return fmt.Sprintf("<uint64-be: value is %d bytes, want 8>", len(v))
+			}
+			return strconv.FormatUint(binary.BigEndian.Uint64(v), 10)
+		default:
+			return string(v)
 		}
-		return string(v)
 	}
 
 	fmt.Fprintf(out, "bucket=%q key=%q\n", bucket, key)
