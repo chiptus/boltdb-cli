@@ -111,6 +111,7 @@ func NewRootCmd() *cobra.Command {
 		newListKeysCmd(),
 		newGetCmd(),
 		newPutCmd(),
+		newPatchCmd(),
 		newPortainerCmd(),
 	)
 
@@ -246,6 +247,47 @@ func newPutCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)
+	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
+	wf.register(c)
+	return c
+}
+
+func newPatchCmd() *cobra.Command {
+	var keyFormat string
+	wf := &writeFlags{}
+
+	c := &cobra.Command{
+		Use:   "patch <bucket> <key> <json-fragment>",
+		Short: "Merge a JSON fragment into the JSON object stored at bucket/key (RFC 7396)",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := resolveDBPath(cmd)
+			if err != nil {
+				return err
+			}
+			bucket, rawKey, fragment := args[0], args[1], args[2]
+
+			key, err := decodeValue(rawKey, keyFormat)
+			if err != nil {
+				return fmt.Errorf("decode key: %w", err)
+			}
+
+			// Check existence here (as get does) so a missing-key error
+			// reports the raw typed key, not the decoded bytes boltio.Patch
+			// operates on internally.
+			if _, found, err := boltio.Get(path, bucket, string(key)); err != nil {
+				return err
+			} else if !found {
+				return fmt.Errorf("no value at bucket %q key %q", bucket, rawKey)
+			}
+
+			opts := wf.writeOptions(cmd)
+			// No --format flag: patch always operates on JSON, so the
+			// dry-run preview renders as plain text (JSON is text).
+			_, err = boltio.Patch(path, bucket, string(key), []byte(fragment), opts)
+			return err
+		},
+	}
 	c.Flags().StringVar(&keyFormat, "key-format", "text", keyFormatFlagUsage)
 	wf.register(c)
 	return c

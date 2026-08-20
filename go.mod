@@ -3,6 +3,7 @@ module github.com/chiptus/boltdb-cli
 go 1.26.5
 
 require (
+	github.com/evanphx/json-patch/v5 v5.9.11
 	github.com/spf13/cobra v1.10.2
 	go.etcd.io/bbolt v1.5.0
 	golang.org/x/mod v0.40.0

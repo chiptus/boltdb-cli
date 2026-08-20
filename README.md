@@ -5,8 +5,8 @@ database files in a GUI browser like `boltbrowser`.
 
 It provides two layers:
 
-- **Generic commands** (`list-buckets`, `list-keys`, `get`, `put`) that work
-  on any bbolt file, with no schema knowledge.
+- **Generic commands** (`list-buckets`, `list-keys`, `get`, `put`, `patch`)
+  that work on any bbolt file, with no schema knowledge.
 - **`portainer` commands** (`get-version`, `set-version`,
   `clear-updating-flag`) — a thin, Portainer-schema-aware layer built on top
   of the generic commands, for fixing the "DB is a newer version, won't
@@ -15,8 +15,8 @@ It provides two layers:
 
 ## Safety
 
-Every write (`put`, `portainer set-version`, `portainer clear-updating-flag`)
-is:
+Every write (`put`, `patch`, `portainer set-version`,
+`portainer clear-updating-flag`) is:
 
 1. Backed up first — the original file is copied to `<path>.bak-<timestamp>`
    before any write, unconditionally.
@@ -49,6 +49,7 @@ boltdb-cli list-buckets [--format text|base64|hex|uint64-be]
 boltdb-cli list-keys <bucket> [--format text|base64|hex|uint64-be]
 boltdb-cli get <bucket> <key> [--key-format ...] [--format ...]
 boltdb-cli put <bucket> <key> <value> [--key-format ...] [--format ...] [--dry-run] [--yes|-f]
+boltdb-cli patch <bucket> <key> <json-fragment> [--key-format ...] [--dry-run] [--yes|-f]
 
 # Portainer
 boltdb-cli portainer get-version
@@ -75,6 +76,22 @@ decimal IDs instead of base64/hex, e.g.:
 ```sh
 boltdb-cli list-keys users --format uint64-be
 boltdb-cli get users 1 --key-format uint64-be
+```
+
+## Patching JSON values
+
+`patch <bucket> <key> <json-fragment>` merges `<json-fragment>` into the
+JSON object currently stored at `bucket/key`, using
+[RFC 7396 JSON Merge Patch](https://www.rfc-editor.org/rfc/rfc7396) semantics:
+fields you name are overwritten (or added, if new), nested objects are
+merged recursively, and a field set to `null` is deleted. It only works on
+JSON object values — it errors if the key is missing, or if the stored
+value or the fragment isn't valid JSON or isn't a JSON object (e.g. a plain
+string, number, or array). It does not create a new bucket/key from a
+fragment alone.
+
+```sh
+boltdb-cli patch users 1 --key-format uint64-be '{"Role":"admin"}'
 ```
 
 ## Portainer version semantics
