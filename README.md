@@ -73,8 +73,8 @@ buckets (`teams`, `users`, `endpoints`, ...) — to read/write them as plain
 decimal IDs instead of base64/hex, e.g.:
 
 ```sh
-boltdb-cli list-keys --format uint64-be users
-boltdb-cli get --key-format uint64-be users 1
+boltdb-cli list-keys users --format uint64-be
+boltdb-cli get users 1 --key-format uint64-be
 ```
 
 ## Portainer version semantics

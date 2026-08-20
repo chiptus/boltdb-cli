@@ -104,7 +104,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "boltdb-cli",
 		Short: "Inspect and patch bbolt database files",
 	}
-	root.PersistentFlags().String("db", "", fmt.Sprintf("path to the bbolt database file (falls back to the %s env var if unset and no db-path argument is given)", dbPathEnvVar))
+	root.PersistentFlags().String("db", "", fmt.Sprintf("path to the bbolt database file (falls back to the %s env var if unset)", dbPathEnvVar))
 
 	root.AddCommand(
 		newListBucketsCmd(),
