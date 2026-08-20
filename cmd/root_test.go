@@ -70,6 +70,36 @@ func TestListKeysCmd(t *testing.T) {
 	}
 }
 
+func TestListKeysCmdBase64ForBinaryKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	err = db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte("teams"))
+		if err != nil {
+			return err
+		}
+		// Mimics Portainer's NextSequence()-derived binary keys.
+		return b.Put([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("team-1"))
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	out, err := run(t, "", "list-keys", "--base64", path, "teams")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if strings.TrimSpace(out) != "AAAAAAAAAAE=" {
+		t.Fatalf("got %q", out)
+	}
+}
+
 func TestGetCmd(t *testing.T) {
 	path := newTestDB(t)
 

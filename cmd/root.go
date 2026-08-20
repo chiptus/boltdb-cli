@@ -50,8 +50,20 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
+func printNames(cmd *cobra.Command, names []string, useBase64 bool) {
+	for _, n := range names {
+		if useBase64 {
+			fmt.Fprintln(cmd.OutOrStdout(), base64.StdEncoding.EncodeToString([]byte(n)))
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), n)
+		}
+	}
+}
+
 func newListBucketsCmd() *cobra.Command {
-	return &cobra.Command{
+	var useBase64 bool
+
+	c := &cobra.Command{
 		Use:   "list-buckets <db-path>",
 		Short: "List every bucket in a bbolt file",
 		Args:  cobra.ExactArgs(1),
@@ -60,16 +72,18 @@ func newListBucketsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			for _, b := range buckets {
-				fmt.Fprintln(cmd.OutOrStdout(), b)
-			}
+			printNames(cmd, buckets, useBase64)
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&useBase64, "base64", false, "print bucket names as base64 (for non-UTF8 bucket names)")
+	return c
 }
 
 func newListKeysCmd() *cobra.Command {
-	return &cobra.Command{
+	var useBase64 bool
+
+	c := &cobra.Command{
 		Use:   "list-keys <db-path> <bucket>",
 		Short: "List every key in a bucket",
 		Args:  cobra.ExactArgs(2),
@@ -78,12 +92,12 @@ func newListKeysCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			for _, k := range keys {
-				fmt.Fprintln(cmd.OutOrStdout(), k)
-			}
+			printNames(cmd, keys, useBase64)
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&useBase64, "base64", false, "print keys as base64 (many bbolt keys, e.g. Portainer's sequence IDs, are binary, not text)")
+	return c
 }
 
 func newGetCmd() *cobra.Command {
