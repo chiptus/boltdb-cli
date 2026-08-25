@@ -44,16 +44,68 @@ type PutResult struct {
 	BackupPath string
 }
 
-// ListBuckets returns the names of every top-level bucket in the database at path.
-func ListBuckets(path string) ([]string, error) {
+// withReadTx opens path read-only, runs fn in a read transaction, and closes
+// the file — concentrating the open/close boilerplate every read in this
+// package needs in one place.
+func withReadTx(path string, fn func(tx *bolt.Tx) error) error {
 	db, err := bolt.Open(path, 0600, &bolt.Options{ReadOnly: true})
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
+		return fmt.Errorf("open %s: %w", path, err)
 	}
 	defer func() { _ = db.Close() }()
 
+	return db.View(fn)
+}
+
+// withWriteTx opens path read-write, runs fn in a write transaction, and
+// closes the file — the write-side counterpart to withReadTx.
+func withWriteTx(path string, fn func(tx *bolt.Tx) error) error {
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	return db.Update(fn)
+}
+
+// listKeysInTx returns the names of every key in bucket, using tx rather
+// than opening its own file handle.
+func listKeysInTx(tx *bolt.Tx, bucket string) ([]string, error) {
+	b := tx.Bucket([]byte(bucket))
+	if b == nil {
+		return nil, fmt.Errorf("bucket %q not found", bucket)
+	}
+	var keys []string
+	err := b.ForEach(func(key, _ []byte) error {
+		keys = append(keys, string(key))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+// getInTx returns the value stored at bucket/key, using tx rather than
+// opening its own file handle. found is false if the bucket or key does not
+// exist.
+func getInTx(tx *bolt.Tx, bucket, key string) (value []byte, found bool) {
+	b := tx.Bucket([]byte(bucket))
+	if b == nil {
+		return nil, false
+	}
+	v := b.Get([]byte(key))
+	if v == nil {
+		return nil, false
+	}
+	return append([]byte(nil), v...), true
+}
+
+// ListBuckets returns the names of every top-level bucket in the database at path.
+func ListBuckets(path string) ([]string, error) {
 	var buckets []string
-	err = db.View(func(tx *bolt.Tx) error {
+	err := withReadTx(path, func(tx *bolt.Tx) error {
 		return tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
 			buckets = append(buckets, string(name))
 			return nil
@@ -67,22 +119,11 @@ func ListBuckets(path string) ([]string, error) {
 
 // ListKeys returns the names of every key in the given bucket.
 func ListKeys(path, bucket string) ([]string, error) {
-	db, err := bolt.Open(path, 0600, &bolt.Options{ReadOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer func() { _ = db.Close() }()
-
 	var keys []string
-	err = db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
-		if b == nil {
-			return fmt.Errorf("bucket %q not found", bucket)
-		}
-		return b.ForEach(func(key, _ []byte) error {
-			keys = append(keys, string(key))
-			return nil
-		})
+	err := withReadTx(path, func(tx *bolt.Tx) error {
+		var err error
+		keys, err = listKeysInTx(tx, bucket)
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -132,23 +173,8 @@ func looksLikeText(b []byte) bool {
 // Get returns the value stored at bucket/key. found is false if the bucket
 // or key does not exist.
 func Get(path, bucket, key string) (value []byte, found bool, err error) {
-	db, err := bolt.Open(path, 0600, &bolt.Options{ReadOnly: true})
-	if err != nil {
-		return nil, false, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer func() { _ = db.Close() }()
-
-	err = db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
-		if b == nil {
-			return nil
-		}
-		v := b.Get([]byte(key))
-		if v == nil {
-			return nil
-		}
-		found = true
-		value = append([]byte(nil), v...)
+	err = withReadTx(path, func(tx *bolt.Tx) error {
+		value, found = getInTx(tx, bucket, key)
 		return nil
 	})
 	if err != nil {
@@ -234,13 +260,7 @@ func Put(path, bucket, key string, value []byte, opts WriteOptions) (PutResult, 
 		return PutResult{}, fmt.Errorf("backup: %w", err)
 	}
 
-	db, err := bolt.Open(path, 0600, nil)
-	if err != nil {
-		return PutResult{}, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer func() { _ = db.Close() }()
-
-	err = db.Update(func(tx *bolt.Tx) error {
+	err = withWriteTx(path, func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(bucket))
 		if err != nil {
 			return err
@@ -321,36 +341,42 @@ type GetSchemaResult struct {
 // in the bucket for a concrete value at that same field, stopping at the
 // first one found.
 func GetSchema(path, bucket, key string) (GetSchemaResult, error) {
-	keys, err := ListKeys(path, bucket)
+	var result GetSchemaResult
+	err := withReadTx(path, func(tx *bolt.Tx) error {
+		keys, err := listKeysInTx(tx, bucket)
+		if err != nil {
+			return err
+		}
+		if len(keys) == 0 {
+			return fmt.Errorf("bucket %q is empty", bucket)
+		}
+
+		sampleKey := key
+		if sampleKey == "" {
+			sampleKey = keys[0]
+		}
+
+		value, found := getInTx(tx, bucket, sampleKey)
+		if !found {
+			return fmt.Errorf("no value at bucket %q key %q", bucket, sampleKey)
+		}
+
+		var decoded any
+		if err := json.Unmarshal(value, &decoded); err != nil {
+			result = GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, NotJSON: true, RawByteLen: len(value)}
+			return nil
+		}
+
+		shape := inferShape(decoded)
+		shape = resolveAmbiguousFields(shape, tx, bucket, sampleKey, keys)
+
+		result = GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, Shape: shape}
+		return nil
+	})
 	if err != nil {
 		return GetSchemaResult{}, err
 	}
-	if len(keys) == 0 {
-		return GetSchemaResult{}, fmt.Errorf("bucket %q is empty", bucket)
-	}
-
-	sampleKey := key
-	if sampleKey == "" {
-		sampleKey = keys[0]
-	}
-
-	value, found, err := Get(path, bucket, sampleKey)
-	if err != nil {
-		return GetSchemaResult{}, err
-	}
-	if !found {
-		return GetSchemaResult{}, fmt.Errorf("no value at bucket %q key %q", bucket, sampleKey)
-	}
-
-	var decoded any
-	if err := json.Unmarshal(value, &decoded); err != nil {
-		return GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, NotJSON: true, RawByteLen: len(value)}, nil
-	}
-
-	shape := inferShape(decoded)
-	shape = resolveAmbiguousFields(shape, path, bucket, sampleKey, keys)
-
-	return GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, Shape: shape}, nil
+	return result, nil
 }
 
 // inferShape infers the Shape of a JSON value already decoded via
@@ -393,7 +419,7 @@ func isAmbiguousShape(s Shape) bool {
 // shared scan of up to fallbackScanLimit other keys in the bucket: each
 // candidate key's value is fetched and decoded once, then checked against
 // every field still unresolved, stopping early once none remain.
-func resolveAmbiguousFields(shape Shape, dbPath, bucket, sampleKey string, keys []string) Shape {
+func resolveAmbiguousFields(shape Shape, tx *bolt.Tx, bucket, sampleKey string, keys []string) Shape {
 	remaining := collectAmbiguousPaths(shape, nil)
 	if len(remaining) == 0 {
 		return shape
@@ -409,8 +435,8 @@ func resolveAmbiguousFields(shape Shape, dbPath, bucket, sampleKey string, keys 
 		}
 		checked++
 
-		value, found, err := Get(dbPath, bucket, k)
-		if err != nil || !found {
+		value, found := getInTx(tx, bucket, k)
+		if !found {
 			continue
 		}
 		var decoded any
