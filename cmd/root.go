@@ -4,18 +4,15 @@
 package cmd
 
 import (
-	"encoding/base64"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/chiptus/boltdb-cli/internal/boltio"
+	"github.com/chiptus/boltdb-cli/internal/valuefmt"
 	"github.com/spf13/cobra"
 )
 
@@ -35,65 +32,22 @@ func resolveDBPath(cmd *cobra.Command) (string, error) {
 	return "", fmt.Errorf("no database path: use --db or set %s", dbPathEnvVar)
 }
 
-// encodeBytes renders b in the given output format. An empty format means
-// "text" (raw bytes, printed as-is).
-func encodeBytes(b []byte, format string) (string, error) {
-	switch format {
-	case "", "text":
-		return string(b), nil
-	case "base64":
-		return base64.StdEncoding.EncodeToString(b), nil
-	case "hex":
-		return hex.EncodeToString(b), nil
-	case "uint64-be":
-		if len(b) != 8 {
-			return "", fmt.Errorf("uint64-be format: value is %d bytes, want 8", len(b))
-		}
-		return strconv.FormatUint(binary.BigEndian.Uint64(b), 10), nil
-	default:
-		return "", fmt.Errorf("unknown format %q (want text, base64, hex, or uint64-be)", format)
-	}
-}
-
-// decodeValue parses s according to format into raw bytes, the inverse of
-// encodeBytes, for commands that take a value/key on the command line.
-func decodeValue(s string, format string) ([]byte, error) {
-	switch format {
-	case "", "text":
-		return []byte(s), nil
-	case "base64":
-		return base64.StdEncoding.DecodeString(s)
-	case "hex":
-		return hex.DecodeString(s)
-	case "uint64-be":
-		n, err := strconv.ParseUint(s, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("uint64-be format: %w", err)
-		}
-		buf := make([]byte, 8)
-		binary.BigEndian.PutUint64(buf, n)
-		return buf, nil
-	default:
-		return nil, fmt.Errorf("unknown format %q (want text, base64, hex, or uint64-be)", format)
-	}
-}
-
 const formatFlagUsage = "value format: text, base64, hex, or uint64-be"
 const keyFormatFlagUsage = "key format: text, base64, hex, or uint64-be (Portainer's NextSequence() keys); guessed from the bucket's existing keys if unset"
 
 // resolveKeyFormat returns keyFormat as given if the user set --key-format
 // to something, otherwise it guesses a format from the bucket's existing
-// keys (see boltio.GuessKeyFormat), falling back to "text" if the bucket is
-// empty, unreadable, or its keys don't clearly fit one format.
-func resolveKeyFormat(path, bucket, keyFormat string) string {
+// keys (see boltio.GuessKeyFormat), falling back to valuefmt.Text if the
+// bucket is empty, unreadable, or its keys don't clearly fit one format.
+func resolveKeyFormat(path, bucket, keyFormat string) (valuefmt.Format, error) {
 	if keyFormat != "" {
-		return keyFormat
+		return valuefmt.Parse(keyFormat)
 	}
 	guess, err := boltio.GuessKeyFormat(path, bucket)
-	if err != nil || guess == "" {
-		return "text"
+	if err != nil || guess == valuefmt.Format("") {
+		return valuefmt.Text, nil
 	}
-	return guess
+	return guess, nil
 }
 
 // writeFlags holds the --dry-run/--yes flags shared by every command that
@@ -138,9 +92,9 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
-func printNames(cmd *cobra.Command, names []string, format string) error {
+func printNames(cmd *cobra.Command, names []string, f valuefmt.Format) error {
 	for _, n := range names {
-		s, err := encodeBytes([]byte(n), format)
+		s, err := valuefmt.Encode([]byte(n), f)
 		if err != nil {
 			return err
 		}
@@ -163,11 +117,15 @@ func newListBucketsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			f, err := valuefmt.Parse(format)
+			if err != nil {
+				return err
+			}
 			buckets, err := boltio.ListBuckets(path)
 			if err != nil {
 				return err
 			}
-			return printNames(cmd, buckets, format)
+			return printNames(cmd, buckets, f)
 		},
 	}
 	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)
@@ -186,11 +144,15 @@ func newListKeysCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			f, err := valuefmt.Parse(format)
+			if err != nil {
+				return err
+			}
 			keys, err := boltio.ListKeys(path, args[0])
 			if err != nil {
 				return err
 			}
-			return printNames(cmd, keys, format)
+			return printNames(cmd, keys, f)
 		},
 	}
 	c.Flags().StringVar(&format, "format", "text", formatFlagUsage)
@@ -211,7 +173,11 @@ func newGetCmd() *cobra.Command {
 			}
 			bucket, rawKey := args[0], args[1]
 
-			key, err := decodeValue(rawKey, resolveKeyFormat(path, bucket, keyFormat))
+			kf, err := resolveKeyFormat(path, bucket, keyFormat)
+			if err != nil {
+				return err
+			}
+			key, err := valuefmt.Decode(rawKey, kf)
 			if err != nil {
 				return fmt.Errorf("decode key: %w", err)
 			}
@@ -223,7 +189,11 @@ func newGetCmd() *cobra.Command {
 			if !found {
 				return fmt.Errorf("no value at bucket %q key %q", bucket, rawKey)
 			}
-			s, err := encodeBytes(val, format)
+			vf, err := valuefmt.Parse(format)
+			if err != nil {
+				return err
+			}
+			s, err := valuefmt.Encode(val, vf)
 			if err != nil {
 				return err
 			}
@@ -251,17 +221,25 @@ func newPutCmd() *cobra.Command {
 			}
 			bucket, rawKey, rawValue := args[0], args[1], args[2]
 
-			key, err := decodeValue(rawKey, resolveKeyFormat(path, bucket, keyFormat))
+			kf, err := resolveKeyFormat(path, bucket, keyFormat)
+			if err != nil {
+				return err
+			}
+			key, err := valuefmt.Decode(rawKey, kf)
 			if err != nil {
 				return fmt.Errorf("decode key: %w", err)
 			}
-			value, err := decodeValue(rawValue, format)
+			vf, err := valuefmt.Parse(format)
+			if err != nil {
+				return err
+			}
+			value, err := valuefmt.Decode(rawValue, vf)
 			if err != nil {
 				return fmt.Errorf("decode value: %w", err)
 			}
 
 			opts := wf.writeOptions(cmd)
-			opts.Format = format
+			opts.Render = func(v []byte) (string, error) { return valuefmt.Encode(v, vf) }
 			_, err = boltio.Put(path, bucket, string(key), value, opts)
 			return err
 		},
@@ -290,7 +268,11 @@ func newGetSchemaCmd() *cobra.Command {
 
 			var sampleKey string
 			if cmd.Flags().Changed("key") {
-				decoded, err := decodeValue(key, resolveKeyFormat(path, bucket, keyFormat))
+				kf, err := resolveKeyFormat(path, bucket, keyFormat)
+				if err != nil {
+					return err
+				}
+				decoded, err := valuefmt.Decode(key, kf)
 				if err != nil {
 					return fmt.Errorf("decode key: %w", err)
 				}
@@ -429,7 +411,11 @@ func newPatchCmd() *cobra.Command {
 			}
 			bucket, rawKey, fragment := args[0], args[1], args[2]
 
-			key, err := decodeValue(rawKey, resolveKeyFormat(path, bucket, keyFormat))
+			kf, err := resolveKeyFormat(path, bucket, keyFormat)
+			if err != nil {
+				return err
+			}
+			key, err := valuefmt.Decode(rawKey, kf)
 			if err != nil {
 				return fmt.Errorf("decode key: %w", err)
 			}

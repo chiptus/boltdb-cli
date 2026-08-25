@@ -2,13 +2,9 @@ package boltio
 
 import (
 	"bufio"
-	"encoding/base64"
-	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -19,10 +15,11 @@ type WriteOptions struct {
 	DryRun bool
 	// Yes skips the interactive confirmation prompt.
 	Yes bool
-	// Format renders the old/new preview in this format instead of raw
-	// text, so binary values don't print as garbled bytes. One of "",
-	// "text", "base64", "hex", or "uint64-be". Empty means "text".
-	Format string
+	// Render turns a raw value into the string shown in the old/new
+	// preview, so binary values don't print as garbled bytes. A nil Render
+	// treats the value as plain text. An error from Render aborts the
+	// write before the confirmation prompt is shown.
+	Render func([]byte) (string, error)
 	// In is read for the confirmation prompt response. Defaults to os.Stdin.
 	In io.Reader
 	// Out receives the preview/prompt text. Defaults to os.Stdout.
@@ -56,27 +53,20 @@ func Put(path, bucket, key string, value []byte, opts WriteOptions) (PutResult, 
 		return PutResult{}, err
 	}
 
-	render := func(v []byte) string {
-		switch opts.Format {
-		case "base64":
-			return base64.StdEncoding.EncodeToString(v)
-		case "hex":
-			return hex.EncodeToString(v)
-		case "uint64-be":
-			if len(v) != 8 {
-				return fmt.Sprintf("<uint64-be: value is %d bytes, want 8>", len(v))
-			}
-			return strconv.FormatUint(binary.BigEndian.Uint64(v), 10)
-		default:
-			return string(v)
-		}
+	render := opts.Render
+	if render == nil {
+		render = func(v []byte) (string, error) { return string(v), nil }
 	}
 
 	if _, err := fmt.Fprintf(out, "bucket=%q key=%q\n", bucket, key); err != nil {
 		return PutResult{}, err
 	}
 	if found {
-		if _, err := fmt.Fprintf(out, "  old: %s\n", render(oldValue)); err != nil {
+		oldRendered, err := render(oldValue)
+		if err != nil {
+			return PutResult{}, fmt.Errorf("render old value: %w", err)
+		}
+		if _, err := fmt.Fprintf(out, "  old: %s\n", oldRendered); err != nil {
 			return PutResult{}, err
 		}
 	} else {
@@ -84,7 +74,11 @@ func Put(path, bucket, key string, value []byte, opts WriteOptions) (PutResult, 
 			return PutResult{}, err
 		}
 	}
-	if _, err := fmt.Fprintf(out, "  new: %s\n", render(value)); err != nil {
+	newRendered, err := render(value)
+	if err != nil {
+		return PutResult{}, fmt.Errorf("render new value: %w", err)
+	}
+	if _, err := fmt.Fprintf(out, "  new: %s\n", newRendered); err != nil {
 		return PutResult{}, err
 	}
 

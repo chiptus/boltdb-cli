@@ -1,6 +1,7 @@
 package boltio
 
 import (
+	"github.com/chiptus/boltdb-cli/internal/valuefmt"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -43,7 +44,7 @@ const keyFormatSampleSize = 20
 // (the shape of a bolt.Bucket.NextSequence() key), otherwise "text". Returns
 // "" if the bucket has no keys to sample, leaving the choice of default to
 // the caller.
-func GuessKeyFormat(path, bucket string) (string, error) {
+func GuessKeyFormat(path, bucket string) (valuefmt.Format, error) {
 	keys, err := ListKeys(path, bucket)
 	if err != nil {
 		return "", err
@@ -55,10 +56,10 @@ func GuessKeyFormat(path, bucket string) (string, error) {
 	limit := min(len(keys), keyFormatSampleSize)
 	for _, k := range keys[:limit] {
 		if len(k) != 8 || looksLikeText([]byte(k)) {
-			return "text", nil
+			return valuefmt.Text, nil
 		}
 	}
-	return "uint64-be", nil
+	return valuefmt.Uint64BE, nil
 }
 
 // looksLikeText reports whether b is entirely printable ASCII, the shape of
