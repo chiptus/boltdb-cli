@@ -4,13 +4,18 @@ import (
 	"testing"
 
 	"github.com/chiptus/boltdb-cli/internal/boltio"
+	"github.com/chiptus/boltdb-cli/internal/valuefmt"
 	bolt "go.etcd.io/bbolt"
 )
 
 func TestListBuckets(t *testing.T) {
-	path := newTestDB(t)
+	db := newTestDB(t)
 
-	buckets, err := boltio.ListBuckets(path)
+	var buckets []string
+	err := db.View(func(tx *bolt.Tx) error {
+		buckets = boltio.ListBuckets(tx)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("ListBuckets: %v", err)
 	}
@@ -20,9 +25,14 @@ func TestListBuckets(t *testing.T) {
 }
 
 func TestListKeys(t *testing.T) {
-	path := newTestDB(t)
+	db := newTestDB(t)
 
-	keys, err := boltio.ListKeys(path, "version")
+	var keys []string
+	err := db.View(func(tx *bolt.Tx) error {
+		var err error
+		keys, err = boltio.ListKeys(tx, "version")
+		return err
+	})
 	if err != nil {
 		t.Fatalf("ListKeys: %v", err)
 	}
@@ -32,18 +42,26 @@ func TestListKeys(t *testing.T) {
 }
 
 func TestListKeysMissingBucket(t *testing.T) {
-	path := newTestDB(t)
+	db := newTestDB(t)
 
-	_, err := boltio.ListKeys(path, "does-not-exist")
+	err := db.View(func(tx *bolt.Tx) error {
+		_, err := boltio.ListKeys(tx, "does-not-exist")
+		return err
+	})
 	if err == nil {
 		t.Fatal("expected error for missing bucket")
 	}
 }
 
 func TestGuessKeyFormatUint64BE(t *testing.T) {
-	path := seedBucket(t, "teams", []byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("team-1"))
+	db := seedBucket(t, "teams", []byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("team-1"))
 
-	got, err := boltio.GuessKeyFormat(path, "teams")
+	var got valuefmt.Format
+	err := db.View(func(tx *bolt.Tx) error {
+		var err error
+		got, err = boltio.GuessKeyFormat(tx, "teams")
+		return err
+	})
 	if err != nil {
 		t.Fatalf("GuessKeyFormat: %v", err)
 	}
@@ -53,9 +71,14 @@ func TestGuessKeyFormatUint64BE(t *testing.T) {
 }
 
 func TestGuessKeyFormatText(t *testing.T) {
-	path := newTestDB(t)
+	db := newTestDB(t)
 
-	got, err := boltio.GuessKeyFormat(path, "version")
+	var got valuefmt.Format
+	err := db.View(func(tx *bolt.Tx) error {
+		var err error
+		got, err = boltio.GuessKeyFormat(tx, "version")
+		return err
+	})
 	if err != nil {
 		t.Fatalf("GuessKeyFormat: %v", err)
 	}
@@ -65,9 +88,14 @@ func TestGuessKeyFormatText(t *testing.T) {
 }
 
 func TestGuessKeyFormatEightByteTextKeyStillGuessesText(t *testing.T) {
-	path := seedBucket(t, "codes", []byte("ABCDEFGH"), []byte("value"))
+	db := seedBucket(t, "codes", []byte("ABCDEFGH"), []byte("value"))
 
-	got, err := boltio.GuessKeyFormat(path, "codes")
+	var got valuefmt.Format
+	err := db.View(func(tx *bolt.Tx) error {
+		var err error
+		got, err = boltio.GuessKeyFormat(tx, "codes")
+		return err
+	})
 	if err != nil {
 		t.Fatalf("GuessKeyFormat: %v", err)
 	}
@@ -77,23 +105,21 @@ func TestGuessKeyFormatEightByteTextKeyStillGuessesText(t *testing.T) {
 }
 
 func TestGuessKeyFormatEmptyBucket(t *testing.T) {
-	path := newTestDB(t)
-	db, err := bolt.Open(path, 0600, nil)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	err = db.Update(func(tx *bolt.Tx) error {
+	db := newTestDB(t)
+	err := db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte("empty"))
 		return err
 	})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
 
-	got, err := boltio.GuessKeyFormat(path, "empty")
+	var got valuefmt.Format
+	err = db.View(func(tx *bolt.Tx) error {
+		var err error
+		got, err = boltio.GuessKeyFormat(tx, "empty")
+		return err
+	})
 	if err != nil {
 		t.Fatalf("GuessKeyFormat: %v", err)
 	}
@@ -103,9 +129,14 @@ func TestGuessKeyFormatEmptyBucket(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	path := newTestDB(t)
+	db := newTestDB(t)
 
-	val, found, err := boltio.Get(path, "version", "VERSION")
+	var val []byte
+	var found bool
+	err := db.View(func(tx *bolt.Tx) error {
+		val, found = boltio.Get(tx, "version", "VERSION")
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -118,9 +149,13 @@ func TestGet(t *testing.T) {
 }
 
 func TestGetMissingKey(t *testing.T) {
-	path := newTestDB(t)
+	db := newTestDB(t)
 
-	_, found, err := boltio.Get(path, "version", "NOPE")
+	var found bool
+	err := db.View(func(tx *bolt.Tx) error {
+		_, found = boltio.Get(tx, "version", "NOPE")
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

@@ -5,15 +5,27 @@ import (
 	"testing"
 
 	"github.com/chiptus/boltdb-cli/internal/boltio"
+	bolt "go.etcd.io/bbolt"
 )
 
-func TestGetSchemaObjectFields(t *testing.T) {
-	path := newTestDB(t)
-
-	res, err := boltio.GetSchema(path, "version", "")
+func getSchema(t *testing.T, db *bolt.DB, bucket, key string) boltio.GetSchemaResult {
+	t.Helper()
+	var res boltio.GetSchemaResult
+	err := db.View(func(tx *bolt.Tx) error {
+		var err error
+		res, err = boltio.GetSchema(tx, bucket, key)
+		return err
+	})
 	if err != nil {
 		t.Fatalf("GetSchema: %v", err)
 	}
+	return res
+}
+
+func TestGetSchemaObjectFields(t *testing.T) {
+	db := newTestDB(t)
+
+	res := getSchema(t, db, "version", "")
 	if res.SampleKey != "VERSION" {
 		t.Fatalf("got sample key %q, want VERSION", res.SampleKey)
 	}
@@ -27,18 +39,15 @@ func TestGetSchemaObjectFields(t *testing.T) {
 }
 
 func TestGetSchemaNestedObject(t *testing.T) {
-	path := newTestDB(t)
-	_, err := boltio.Put(path, "version", "NESTED",
+	db := newTestDB(t)
+	_, err := boltio.Put(db, "version", "NESTED",
 		[]byte(`{"Outer":{"Inner":42}}`),
 		boltio.WriteOptions{Yes: true, Out: &bytes.Buffer{}})
 	if err != nil {
 		t.Fatalf("seed Put: %v", err)
 	}
 
-	res, err := boltio.GetSchema(path, "version", "NESTED")
-	if err != nil {
-		t.Fatalf("GetSchema: %v", err)
-	}
+	res := getSchema(t, db, "version", "NESTED")
 	outer, ok := res.Shape.Fields["Outer"]
 	if !ok || outer.Kind != "object" {
 		t.Fatalf("got %+v, want Outer: object", res.Shape.Fields)
@@ -50,18 +59,15 @@ func TestGetSchemaNestedObject(t *testing.T) {
 }
 
 func TestGetSchemaArrayField(t *testing.T) {
-	path := newTestDB(t)
-	_, err := boltio.Put(path, "version", "ARR",
+	db := newTestDB(t)
+	_, err := boltio.Put(db, "version", "ARR",
 		[]byte(`{"Tags":["a","b"],"Empty":[]}`),
 		boltio.WriteOptions{Yes: true, Out: &bytes.Buffer{}})
 	if err != nil {
 		t.Fatalf("seed Put: %v", err)
 	}
 
-	res, err := boltio.GetSchema(path, "version", "ARR")
-	if err != nil {
-		t.Fatalf("GetSchema: %v", err)
-	}
+	res := getSchema(t, db, "version", "ARR")
 	tags := res.Shape.Fields["Tags"]
 	if tags.Kind != "array" || tags.Elem == nil || tags.Elem.Kind != "string" {
 		t.Fatalf("got %+v, want array<string>", tags)
@@ -73,32 +79,26 @@ func TestGetSchemaArrayField(t *testing.T) {
 }
 
 func TestGetSchemaNonObjectTopLevel(t *testing.T) {
-	path := newTestDB(t)
-	_, err := boltio.Put(path, "version", "SCALAR", []byte(`42`), boltio.WriteOptions{Yes: true, Out: &bytes.Buffer{}})
+	db := newTestDB(t)
+	_, err := boltio.Put(db, "version", "SCALAR", []byte(`42`), boltio.WriteOptions{Yes: true, Out: &bytes.Buffer{}})
 	if err != nil {
 		t.Fatalf("seed Put: %v", err)
 	}
 
-	res, err := boltio.GetSchema(path, "version", "SCALAR")
-	if err != nil {
-		t.Fatalf("GetSchema: %v", err)
-	}
+	res := getSchema(t, db, "version", "SCALAR")
 	if res.Shape.Kind != "number" {
 		t.Fatalf("got kind %q, want number", res.Shape.Kind)
 	}
 }
 
 func TestGetSchemaNotJSON(t *testing.T) {
-	path := newTestDB(t)
-	_, err := boltio.Put(path, "version", "TEXT", []byte("not json"), boltio.WriteOptions{Yes: true, Out: &bytes.Buffer{}})
+	db := newTestDB(t)
+	_, err := boltio.Put(db, "version", "TEXT", []byte("not json"), boltio.WriteOptions{Yes: true, Out: &bytes.Buffer{}})
 	if err != nil {
 		t.Fatalf("seed Put: %v", err)
 	}
 
-	res, err := boltio.GetSchema(path, "version", "TEXT")
-	if err != nil {
-		t.Fatalf("GetSchema: %v", err)
-	}
+	res := getSchema(t, db, "version", "TEXT")
 	if !res.NotJSON {
 		t.Fatal("expected NotJSON=true")
 	}
@@ -108,16 +108,13 @@ func TestGetSchemaNotJSON(t *testing.T) {
 }
 
 func TestGetSchemaExplicitKey(t *testing.T) {
-	path := newTestDB(t)
-	_, err := boltio.Put(path, "version", "OTHER", []byte(`{"X":"y"}`), boltio.WriteOptions{Yes: true, Out: &bytes.Buffer{}})
+	db := newTestDB(t)
+	_, err := boltio.Put(db, "version", "OTHER", []byte(`{"X":"y"}`), boltio.WriteOptions{Yes: true, Out: &bytes.Buffer{}})
 	if err != nil {
 		t.Fatalf("seed Put: %v", err)
 	}
 
-	res, err := boltio.GetSchema(path, "version", "OTHER")
-	if err != nil {
-		t.Fatalf("GetSchema: %v", err)
-	}
+	res := getSchema(t, db, "version", "OTHER")
 	if res.SampleKey != "OTHER" {
 		t.Fatalf("got sample key %q, want OTHER", res.SampleKey)
 	}

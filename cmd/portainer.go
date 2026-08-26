@@ -3,8 +3,10 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/chiptus/boltdb-cli/internal/boltio"
 	"github.com/chiptus/boltdb-cli/internal/portainer"
 	"github.com/spf13/cobra"
+	bolt "go.etcd.io/bbolt"
 )
 
 func newPortainerCmd() *cobra.Command {
@@ -30,7 +32,18 @@ func newPortainerGetVersionCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			v, err := portainer.GetVersion(path)
+			db, err := boltio.OpenRead(path)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = db.Close() }()
+
+			var v portainer.Version
+			err = db.View(func(tx *bolt.Tx) error {
+				var err error
+				v, err = portainer.GetVersion(tx)
+				return err
+			})
 			if err != nil {
 				return err
 			}
@@ -55,6 +68,11 @@ func newPortainerSetVersionCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			db, err := boltio.OpenWrite(path)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = db.Close() }()
 
 			input := portainer.SetVersionInput{}
 			if cmd.Flags().Changed("schema-version") {
@@ -67,7 +85,7 @@ func newPortainerSetVersionCmd() *cobra.Command {
 				input.MigratorCount = &migratorCount
 			}
 
-			_, err = portainer.SetVersion(path, input, wf.writeOptions(cmd))
+			_, err = portainer.SetVersion(db, input, wf.writeOptions(cmd))
 			return err
 		},
 	}
@@ -90,7 +108,13 @@ func newPortainerClearUpdatingFlagCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = portainer.ClearUpdatingFlag(path, wf.writeOptions(cmd))
+			db, err := boltio.OpenWrite(path)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = db.Close() }()
+
+			_, err = portainer.ClearUpdatingFlag(db, wf.writeOptions(cmd))
 			return err
 		},
 	}

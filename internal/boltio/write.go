@@ -38,7 +38,7 @@ type PutResult struct {
 // is preceded by a timestamped backup of the file. Callers can preview the
 // change without writing via WriteOptions.DryRun, and every non-dry-run
 // write is confirmed interactively unless WriteOptions.Yes is set.
-func Put(path, bucket, key string, value []byte, opts WriteOptions) (PutResult, error) {
+func Put(db *bolt.DB, bucket, key string, value []byte, opts WriteOptions) (PutResult, error) {
 	out := opts.Out
 	if out == nil {
 		out = os.Stdout
@@ -48,7 +48,12 @@ func Put(path, bucket, key string, value []byte, opts WriteOptions) (PutResult, 
 		in = os.Stdin
 	}
 
-	oldValue, found, err := Get(path, bucket, key)
+	var oldValue []byte
+	var found bool
+	err := db.View(func(tx *bolt.Tx) error {
+		oldValue, found = Get(tx, bucket, key)
+		return nil
+	})
 	if err != nil {
 		return PutResult{}, err
 	}
@@ -103,12 +108,12 @@ func Put(path, bucket, key string, value []byte, opts WriteOptions) (PutResult, 
 		}
 	}
 
-	backupPath, err := backup(path)
+	backupPath, err := backup(db.Path())
 	if err != nil {
 		return PutResult{}, fmt.Errorf("backup: %w", err)
 	}
 
-	err = withWriteTx(path, func(tx *bolt.Tx) error {
+	err = db.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(bucket))
 		if err != nil {
 			return err

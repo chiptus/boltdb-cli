@@ -41,43 +41,34 @@ type GetSchemaResult struct {
 // resolved, when possible, by scanning up to fallbackScanLimit other keys
 // in the bucket for a concrete value at that same field, stopping at the
 // first one found.
-func GetSchema(path, bucket, key string) (GetSchemaResult, error) {
-	var result GetSchemaResult
-	err := withReadTx(path, func(tx *bolt.Tx) error {
-		keys, err := listKeysInTx(tx, bucket)
-		if err != nil {
-			return err
-		}
-		if len(keys) == 0 {
-			return fmt.Errorf("bucket %q is empty", bucket)
-		}
-
-		sampleKey := key
-		if sampleKey == "" {
-			sampleKey = keys[0]
-		}
-
-		value, found := getInTx(tx, bucket, sampleKey)
-		if !found {
-			return fmt.Errorf("no value at bucket %q key %q", bucket, sampleKey)
-		}
-
-		var decoded any
-		if err := json.Unmarshal(value, &decoded); err != nil {
-			result = GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, NotJSON: true, RawByteLen: len(value)}
-			return nil
-		}
-
-		shape := inferShape(decoded)
-		shape = resolveAmbiguousFields(shape, tx, bucket, sampleKey, keys)
-
-		result = GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, Shape: shape}
-		return nil
-	})
+func GetSchema(tx *bolt.Tx, bucket, key string) (GetSchemaResult, error) {
+	keys, err := ListKeys(tx, bucket)
 	if err != nil {
 		return GetSchemaResult{}, err
 	}
-	return result, nil
+	if len(keys) == 0 {
+		return GetSchemaResult{}, fmt.Errorf("bucket %q is empty", bucket)
+	}
+
+	sampleKey := key
+	if sampleKey == "" {
+		sampleKey = keys[0]
+	}
+
+	value, found := Get(tx, bucket, sampleKey)
+	if !found {
+		return GetSchemaResult{}, fmt.Errorf("no value at bucket %q key %q", bucket, sampleKey)
+	}
+
+	var decoded any
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, NotJSON: true, RawByteLen: len(value)}, nil
+	}
+
+	shape := inferShape(decoded)
+	shape = resolveAmbiguousFields(shape, tx, bucket, sampleKey, keys)
+
+	return GetSchemaResult{Bucket: bucket, SampleKey: sampleKey, Shape: shape}, nil
 }
 
 // inferShape infers the Shape of a JSON value already decoded via

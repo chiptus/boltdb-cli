@@ -1,32 +1,32 @@
 package boltio
 
 import (
+	"fmt"
+
 	"github.com/chiptus/boltdb-cli/internal/valuefmt"
 	bolt "go.etcd.io/bbolt"
 )
 
-// ListBuckets returns the names of every top-level bucket in the database at path.
-func ListBuckets(path string) ([]string, error) {
+// ListBuckets returns the names of every top-level bucket in the database.
+func ListBuckets(tx *bolt.Tx) []string {
 	var buckets []string
-	err := withReadTx(path, func(tx *bolt.Tx) error {
-		return tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
-			buckets = append(buckets, string(name))
-			return nil
-		})
+	_ = tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
+		buckets = append(buckets, string(name))
+		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return buckets, nil
+	return buckets
 }
 
 // ListKeys returns the names of every key in the given bucket.
-func ListKeys(path, bucket string) ([]string, error) {
+func ListKeys(tx *bolt.Tx, bucket string) ([]string, error) {
+	b := tx.Bucket([]byte(bucket))
+	if b == nil {
+		return nil, fmt.Errorf("bucket %q not found", bucket)
+	}
 	var keys []string
-	err := withReadTx(path, func(tx *bolt.Tx) error {
-		var err error
-		keys, err = listKeysInTx(tx, bucket)
-		return err
+	err := b.ForEach(func(key, _ []byte) error {
+		keys = append(keys, string(key))
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -44,8 +44,8 @@ const keyFormatSampleSize = 20
 // (the shape of a bolt.Bucket.NextSequence() key), otherwise "text". Returns
 // "" if the bucket has no keys to sample, leaving the choice of default to
 // the caller.
-func GuessKeyFormat(path, bucket string) (valuefmt.Format, error) {
-	keys, err := ListKeys(path, bucket)
+func GuessKeyFormat(tx *bolt.Tx, bucket string) (valuefmt.Format, error) {
+	keys, err := ListKeys(tx, bucket)
 	if err != nil {
 		return "", err
 	}
@@ -75,13 +75,14 @@ func looksLikeText(b []byte) bool {
 
 // Get returns the value stored at bucket/key. found is false if the bucket
 // or key does not exist.
-func Get(path, bucket, key string) (value []byte, found bool, err error) {
-	err = withReadTx(path, func(tx *bolt.Tx) error {
-		value, found = getInTx(tx, bucket, key)
-		return nil
-	})
-	if err != nil {
-		return nil, false, err
+func Get(tx *bolt.Tx, bucket, key string) (value []byte, found bool) {
+	b := tx.Bucket([]byte(bucket))
+	if b == nil {
+		return nil, false
 	}
-	return value, found, nil
+	v := b.Get([]byte(key))
+	if v == nil {
+		return nil, false
+	}
+	return append([]byte(nil), v...), true
 }

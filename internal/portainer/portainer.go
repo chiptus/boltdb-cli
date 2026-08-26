@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/chiptus/boltdb-cli/internal/boltio"
+	bolt "go.etcd.io/bbolt"
 	"golang.org/x/mod/semver"
 )
 
@@ -30,14 +31,11 @@ type Version struct {
 	InstanceID    string
 }
 
-// GetVersion reads and decodes the Version struct stored at path.
-func GetVersion(path string) (Version, error) {
-	raw, found, err := boltio.Get(path, Bucket, VersionKey)
-	if err != nil {
-		return Version{}, err
-	}
+// GetVersion reads and decodes the Version struct stored in tx.
+func GetVersion(tx *bolt.Tx) (Version, error) {
+	raw, found := boltio.Get(tx, Bucket, VersionKey)
 	if !found {
-		return Version{}, fmt.Errorf("no %s/%s key found in %s", Bucket, VersionKey, path)
+		return Version{}, fmt.Errorf("no %s/%s key found", Bucket, VersionKey)
 	}
 
 	var v Version
@@ -58,12 +56,17 @@ type SetVersionInput struct {
 // SetVersion reads the current Version struct, mutates only the fields set
 // in input, and writes the result back through boltio.Put (so it inherits
 // the shared backup/dry-run/confirmation safety net).
-func SetVersion(path string, input SetVersionInput, opts boltio.WriteOptions) (boltio.PutResult, error) {
+func SetVersion(db *bolt.DB, input SetVersionInput, opts boltio.WriteOptions) (boltio.PutResult, error) {
 	if input.SchemaVersion != nil && !semver.IsValid("v"+*input.SchemaVersion) {
 		return boltio.PutResult{}, fmt.Errorf("%q is not a valid semver version", *input.SchemaVersion)
 	}
 
-	current, err := GetVersion(path)
+	var current Version
+	err := db.View(func(tx *bolt.Tx) error {
+		v, err := GetVersion(tx)
+		current = v
+		return err
+	})
 	if err != nil {
 		return boltio.PutResult{}, err
 	}
@@ -83,11 +86,11 @@ func SetVersion(path string, input SetVersionInput, opts boltio.WriteOptions) (b
 		return boltio.PutResult{}, fmt.Errorf("encode version: %w", err)
 	}
 
-	return boltio.Put(path, Bucket, VersionKey, encoded, opts)
+	return boltio.Put(db, Bucket, VersionKey, encoded, opts)
 }
 
 // ClearUpdatingFlag unsticks a database left with DB_UPDATING=true after a
 // crash mid-migration.
-func ClearUpdatingFlag(path string, opts boltio.WriteOptions) (boltio.PutResult, error) {
-	return boltio.Put(path, Bucket, UpdatingKeyName, []byte("false"), opts)
+func ClearUpdatingFlag(db *bolt.DB, opts boltio.WriteOptions) (boltio.PutResult, error) {
+	return boltio.Put(db, Bucket, UpdatingKeyName, []byte("false"), opts)
 }

@@ -31,7 +31,7 @@ func resolveAmbiguousFields(shape Shape, tx *bolt.Tx, bucket, sampleKey string, 
 		}
 		checked++
 
-		value, found := getInTx(tx, bucket, k)
+		value, found := Get(tx, bucket, k)
 		if !found {
 			continue
 		}

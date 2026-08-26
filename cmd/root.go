@@ -14,6 +14,7 @@ import (
 	"github.com/chiptus/boltdb-cli/internal/boltio"
 	"github.com/chiptus/boltdb-cli/internal/valuefmt"
 	"github.com/spf13/cobra"
+	bolt "go.etcd.io/bbolt"
 )
 
 // dbPathEnvVar lets a database path be set once per shell session instead
@@ -39,11 +40,11 @@ const keyFormatFlagUsage = "key format: text, base64, hex, or uint64-be (Portain
 // to something, otherwise it guesses a format from the bucket's existing
 // keys (see boltio.GuessKeyFormat), falling back to valuefmt.Text if the
 // bucket is empty, unreadable, or its keys don't clearly fit one format.
-func resolveKeyFormat(path, bucket, keyFormat string) (valuefmt.Format, error) {
+func resolveKeyFormat(tx *bolt.Tx, bucket, keyFormat string) (valuefmt.Format, error) {
 	if keyFormat != "" {
 		return valuefmt.Parse(keyFormat)
 	}
-	guess, err := boltio.GuessKeyFormat(path, bucket)
+	guess, err := boltio.GuessKeyFormat(tx, bucket)
 	if err != nil || guess == valuefmt.Format("") {
 		return valuefmt.Text, nil
 	}
@@ -121,7 +122,17 @@ func newListBucketsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			buckets, err := boltio.ListBuckets(path)
+			db, err := boltio.OpenRead(path)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = db.Close() }()
+
+			var buckets []string
+			err = db.View(func(tx *bolt.Tx) error {
+				buckets = boltio.ListBuckets(tx)
+				return nil
+			})
 			if err != nil {
 				return err
 			}
@@ -148,7 +159,18 @@ func newListKeysCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			keys, err := boltio.ListKeys(path, args[0])
+			db, err := boltio.OpenRead(path)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = db.Close() }()
+
+			var keys []string
+			err = db.View(func(tx *bolt.Tx) error {
+				var err error
+				keys, err = boltio.ListKeys(tx, args[0])
+				return err
+			})
 			if err != nil {
 				return err
 			}
@@ -173,21 +195,32 @@ func newGetCmd() *cobra.Command {
 			}
 			bucket, rawKey := args[0], args[1]
 
-			kf, err := resolveKeyFormat(path, bucket, keyFormat)
+			db, err := boltio.OpenRead(path)
 			if err != nil {
 				return err
 			}
-			key, err := valuefmt.Decode(rawKey, kf)
-			if err != nil {
-				return fmt.Errorf("decode key: %w", err)
-			}
+			defer func() { _ = db.Close() }()
 
-			val, found, err := boltio.Get(path, bucket, string(key))
+			var val []byte
+			err = db.View(func(tx *bolt.Tx) error {
+				kf, err := resolveKeyFormat(tx, bucket, keyFormat)
+				if err != nil {
+					return err
+				}
+				key, err := valuefmt.Decode(rawKey, kf)
+				if err != nil {
+					return fmt.Errorf("decode key: %w", err)
+				}
+
+				v, found := boltio.Get(tx, bucket, string(key))
+				if !found {
+					return fmt.Errorf("no value at bucket %q key %q", bucket, rawKey)
+				}
+				val = v
+				return nil
+			})
 			if err != nil {
 				return err
-			}
-			if !found {
-				return fmt.Errorf("no value at bucket %q key %q", bucket, rawKey)
 			}
 			vf, err := valuefmt.Parse(format)
 			if err != nil {
@@ -221,7 +254,18 @@ func newPutCmd() *cobra.Command {
 			}
 			bucket, rawKey, rawValue := args[0], args[1], args[2]
 
-			kf, err := resolveKeyFormat(path, bucket, keyFormat)
+			db, err := boltio.OpenWrite(path)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = db.Close() }()
+
+			var kf valuefmt.Format
+			err = db.View(func(tx *bolt.Tx) error {
+				var err error
+				kf, err = resolveKeyFormat(tx, bucket, keyFormat)
+				return err
+			})
 			if err != nil {
 				return err
 			}
@@ -240,7 +284,7 @@ func newPutCmd() *cobra.Command {
 
 			opts := wf.writeOptions(cmd)
 			opts.Render = func(v []byte) (string, error) { return valuefmt.Encode(v, vf) }
-			_, err = boltio.Put(path, bucket, string(key), value, opts)
+			_, err = boltio.Put(db, bucket, string(key), value, opts)
 			return err
 		},
 	}
@@ -266,20 +310,31 @@ func newGetSchemaCmd() *cobra.Command {
 			}
 			bucket := args[0]
 
-			var sampleKey string
-			if cmd.Flags().Changed("key") {
-				kf, err := resolveKeyFormat(path, bucket, keyFormat)
-				if err != nil {
-					return err
-				}
-				decoded, err := valuefmt.Decode(key, kf)
-				if err != nil {
-					return fmt.Errorf("decode key: %w", err)
-				}
-				sampleKey = string(decoded)
+			db, err := boltio.OpenRead(path)
+			if err != nil {
+				return err
 			}
+			defer func() { _ = db.Close() }()
 
-			result, err := boltio.GetSchema(path, bucket, sampleKey)
+			var result boltio.GetSchemaResult
+			err = db.View(func(tx *bolt.Tx) error {
+				var sampleKey string
+				if cmd.Flags().Changed("key") {
+					kf, err := resolveKeyFormat(tx, bucket, keyFormat)
+					if err != nil {
+						return err
+					}
+					decoded, err := valuefmt.Decode(key, kf)
+					if err != nil {
+						return fmt.Errorf("decode key: %w", err)
+					}
+					sampleKey = string(decoded)
+				}
+
+				var err error
+				result, err = boltio.GetSchema(tx, bucket, sampleKey)
+				return err
+			})
 			if err != nil {
 				return err
 			}
@@ -411,28 +466,40 @@ func newPatchCmd() *cobra.Command {
 			}
 			bucket, rawKey, fragment := args[0], args[1], args[2]
 
-			kf, err := resolveKeyFormat(path, bucket, keyFormat)
+			db, err := boltio.OpenWrite(path)
 			if err != nil {
 				return err
 			}
-			key, err := valuefmt.Decode(rawKey, kf)
-			if err != nil {
-				return fmt.Errorf("decode key: %w", err)
-			}
+			defer func() { _ = db.Close() }()
 
-			// Check existence here (as get does) so a missing-key error
-			// reports the raw typed key, not the decoded bytes boltio.Patch
-			// operates on internally.
-			if _, found, err := boltio.Get(path, bucket, string(key)); err != nil {
+			var key []byte
+			err = db.View(func(tx *bolt.Tx) error {
+				kf, err := resolveKeyFormat(tx, bucket, keyFormat)
+				if err != nil {
+					return err
+				}
+				decoded, err := valuefmt.Decode(rawKey, kf)
+				if err != nil {
+					return fmt.Errorf("decode key: %w", err)
+				}
+				key = decoded
+
+				// Check existence here (as get does) so a missing-key error
+				// reports the raw typed key, not the decoded bytes
+				// boltio.Patch operates on internally.
+				if _, found := boltio.Get(tx, bucket, string(key)); !found {
+					return fmt.Errorf("no value at bucket %q key %q", bucket, rawKey)
+				}
+				return nil
+			})
+			if err != nil {
 				return err
-			} else if !found {
-				return fmt.Errorf("no value at bucket %q key %q", bucket, rawKey)
 			}
 
 			opts := wf.writeOptions(cmd)
 			// No --format flag: patch always operates on JSON, so the
 			// dry-run preview renders as plain text (JSON is text).
-			_, err = boltio.Patch(path, bucket, string(key), []byte(fragment), opts)
+			_, err = boltio.Patch(db, bucket, string(key), []byte(fragment), opts)
 			return err
 		},
 	}

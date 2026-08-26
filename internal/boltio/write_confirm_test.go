@@ -9,11 +9,11 @@ import (
 )
 
 func TestPutPromptsAndAbortsOnNo(t *testing.T) {
-	path := newTestDB(t)
+	db := newTestDB(t)
 	out := &bytes.Buffer{}
 	in := strings.NewReader("n\n")
 
-	res, err := boltio.Put(path, "version", "VERSION", []byte(`{"SchemaVersion":"2.20.0"}`), boltio.WriteOptions{
+	res, err := boltio.Put(db, "version", "VERSION", []byte(`{"SchemaVersion":"2.20.0"}`), boltio.WriteOptions{
 		In:  in,
 		Out: out,
 	})
@@ -27,18 +27,18 @@ func TestPutPromptsAndAbortsOnNo(t *testing.T) {
 		t.Fatal("expected no backup on abort")
 	}
 
-	val, _, _ := boltio.Get(path, "version", "VERSION")
+	val, _ := getFromDB(t, db, "version", "VERSION")
 	if string(val) != `{"SchemaVersion":"2.19.0"}` {
 		t.Fatalf("aborted write mutated the file: got %q", val)
 	}
 }
 
 func TestPutPromptsAndWritesOnYes(t *testing.T) {
-	path := newTestDB(t)
+	db := newTestDB(t)
 	out := &bytes.Buffer{}
 	in := strings.NewReader("y\n")
 
-	res, err := boltio.Put(path, "version", "VERSION", []byte(`{"SchemaVersion":"2.20.0"}`), boltio.WriteOptions{
+	res, err := boltio.Put(db, "version", "VERSION", []byte(`{"SchemaVersion":"2.20.0"}`), boltio.WriteOptions{
 		In:  in,
 		Out: out,
 	})
@@ -49,7 +49,7 @@ func TestPutPromptsAndWritesOnYes(t *testing.T) {
 		t.Fatal("expected confirmed 'y' to write")
 	}
 
-	val, _, _ := boltio.Get(path, "version", "VERSION")
+	val, _ := getFromDB(t, db, "version", "VERSION")
 	if string(val) != `{"SchemaVersion":"2.20.0"}` {
 		t.Fatalf("got %q", val)
 	}

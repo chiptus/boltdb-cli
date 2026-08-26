@@ -7,33 +7,16 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func newTestDB(t *testing.T) string {
+// newTestDB opens a temp bbolt file seeded with a "version"/"VERSION" key,
+// and registers t.Cleanup to close it.
+func newTestDB(t *testing.T) *bolt.DB {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.db")
-
-	db, err := bolt.Open(path, 0600, nil)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	err = db.Update(func(tx *bolt.Tx) error {
-		b, err := tx.CreateBucketIfNotExists([]byte("version"))
-		if err != nil {
-			return err
-		}
-		return b.Put([]byte("VERSION"), []byte(`{"SchemaVersion":"2.19.0"}`))
-	})
-	if err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	return path
+	return seedBucket(t, "version", []byte("VERSION"), []byte(`{"SchemaVersion":"2.19.0"}`))
 }
 
-// seedBucket creates a temp bbolt file with a single bucket/key/value seeded.
-func seedBucket(t *testing.T, bucket string, key, value []byte) string {
+// seedBucket opens a temp bbolt file with a single bucket/key/value seeded,
+// and registers t.Cleanup to close it.
+func seedBucket(t *testing.T, bucket string, key, value []byte) *bolt.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.db")
 
@@ -41,6 +24,8 @@ func seedBucket(t *testing.T, bucket string, key, value []byte) string {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
+
 	err = db.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(bucket))
 		if err != nil {
@@ -51,8 +36,5 @@ func seedBucket(t *testing.T, bucket string, key, value []byte) string {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	return path
+	return db
 }

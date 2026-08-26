@@ -5,14 +5,20 @@ import (
 	"fmt"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
+	bolt "go.etcd.io/bbolt"
 )
 
 // Patch reads the JSON object stored at bucket/key, applies fragment to it
 // as an RFC 7396 JSON Merge Patch (a null value in fragment deletes the
 // corresponding key), and writes the merged result back through Put, so it
 // inherits the same backup/dry-run/confirmation safety net.
-func Patch(path, bucket, key string, fragment []byte, opts WriteOptions) (PutResult, error) {
-	current, found, err := Get(path, bucket, key)
+func Patch(db *bolt.DB, bucket, key string, fragment []byte, opts WriteOptions) (PutResult, error) {
+	var current []byte
+	var found bool
+	err := db.View(func(tx *bolt.Tx) error {
+		current, found = Get(tx, bucket, key)
+		return nil
+	})
 	if err != nil {
 		return PutResult{}, err
 	}
@@ -32,7 +38,7 @@ func Patch(path, bucket, key string, fragment []byte, opts WriteOptions) (PutRes
 		return PutResult{}, fmt.Errorf("apply patch: %w", err)
 	}
 
-	return Put(path, bucket, key, merged, opts)
+	return Put(db, bucket, key, merged, opts)
 }
 
 // requireJSONObject returns an error if b is not valid JSON, or is valid
