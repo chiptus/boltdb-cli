@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/chiptus/boltdb-cli/internal/boltio"
 	"github.com/chiptus/boltdb-cli/internal/portainer"
 	"github.com/spf13/cobra"
 	bolt "go.etcd.io/bbolt"
@@ -28,11 +27,7 @@ func newPortainerGetVersionCmd() *cobra.Command {
 		Short: "Print the stored Portainer schema version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveDBPath(cmd)
-			if err != nil {
-				return err
-			}
-			db, err := boltio.OpenRead(path)
+			db, err := openReadDB(cmd)
 			if err != nil {
 				return err
 			}
@@ -64,11 +59,7 @@ func newPortainerSetVersionCmd() *cobra.Command {
 		Short: "Patch the stored Portainer schema version, edition, or migrator count",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveDBPath(cmd)
-			if err != nil {
-				return err
-			}
-			db, err := boltio.OpenWrite(path)
+			db, err := openWriteDB(cmd)
 			if err != nil {
 				return err
 			}
@@ -104,11 +95,7 @@ func newPortainerClearUpdatingFlagCmd() *cobra.Command {
 		Short: "Unstick a database left with DB_UPDATING=true after a crashed migration",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveDBPath(cmd)
-			if err != nil {
-				return err
-			}
-			db, err := boltio.OpenWrite(path)
+			db, err := openWriteDB(cmd)
 			if err != nil {
 				return err
 			}

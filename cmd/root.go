@@ -92,15 +92,11 @@ func newListBucketsCmd() *cobra.Command {
 		Short: "List every bucket in a bbolt file",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveDBPath(cmd)
-			if err != nil {
-				return err
-			}
 			f, err := valuefmt.Parse(format)
 			if err != nil {
 				return err
 			}
-			db, err := boltio.OpenRead(path)
+			db, err := openReadDB(cmd)
 			if err != nil {
 				return err
 			}
@@ -129,15 +125,11 @@ func newListKeysCmd() *cobra.Command {
 		Short: "List every key in a bucket",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveDBPath(cmd)
-			if err != nil {
-				return err
-			}
 			f, err := valuefmt.Parse(format)
 			if err != nil {
 				return err
 			}
-			db, err := boltio.OpenRead(path)
+			db, err := openReadDB(cmd)
 			if err != nil {
 				return err
 			}
