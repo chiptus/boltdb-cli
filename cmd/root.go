@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -72,11 +73,21 @@ func (w *writeFlags) writeOptions(cmd *cobra.Command) boltio.WriteOptions {
 	}
 }
 
+// buildVersion returns the module version go install/go build recorded in
+// the binary (e.g. "v0.1.0", or "(devel)" for a local, untagged build).
+func buildVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "unknown"
+}
+
 // NewRootCmd builds the boltdb-cli command tree.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "boltdb-cli",
-		Short: "Inspect and patch bbolt database files",
+		Use:     "boltdb-cli",
+		Short:   "Inspect and patch bbolt database files",
+		Version: buildVersion(),
 	}
 	root.PersistentFlags().String("db", "", fmt.Sprintf("path to the bbolt database file (falls back to the %s env var if unset)", dbPathEnvVar))
 
