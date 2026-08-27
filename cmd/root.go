@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -18,39 +17,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// dbPathEnvVar lets a database path be set once per shell session instead
-// of being passed to every invocation.
-const dbPathEnvVar = "BOLTDB_CLI_PATH"
-
-// resolveDBPath returns the database path a command should use: the --db
-// flag if set, else the BOLTDB_CLI_PATH env var.
-func resolveDBPath(cmd *cobra.Command) (string, error) {
-	if dbFlag, _ := cmd.Flags().GetString("db"); dbFlag != "" {
-		return dbFlag, nil
-	}
-	if env := os.Getenv(dbPathEnvVar); env != "" {
-		return env, nil
-	}
-	return "", fmt.Errorf("no database path: use --db or set %s", dbPathEnvVar)
-}
-
 const formatFlagUsage = "value format: text, base64, hex, or uint64-be"
-const keyFormatFlagUsage = "key format: text, base64, hex, or uint64-be (Portainer's NextSequence() keys); guessed from the bucket's existing keys if unset"
-
-// resolveKeyFormat returns keyFormat as given if the user set --key-format
-// to something, otherwise it guesses a format from the bucket's existing
-// keys (see boltio.GuessKeyFormat), falling back to valuefmt.Text if the
-// bucket is empty, unreadable, or its keys don't clearly fit one format.
-func resolveKeyFormat(tx *bolt.Tx, bucket, keyFormat string) (valuefmt.Format, error) {
-	if keyFormat != "" {
-		return valuefmt.Parse(keyFormat)
-	}
-	guess, err := boltio.GuessKeyFormat(tx, bucket)
-	if err != nil || guess == valuefmt.Format("") {
-		return valuefmt.Text, nil
-	}
-	return guess, nil
-}
 
 // writeFlags holds the --dry-run/--yes flags shared by every command that
 // writes through boltio.Put, and builds the WriteOptions they map to.
@@ -200,13 +167,9 @@ func newGetCmd() *cobra.Command {
 		Short: "Print the value stored at bucket/key",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveDBPath(cmd)
-			if err != nil {
-				return err
-			}
 			bucket, rawKey := args[0], args[1]
 
-			db, err := boltio.OpenRead(path)
+			db, err := openReadDB(cmd)
 			if err != nil {
 				return err
 			}
@@ -214,13 +177,9 @@ func newGetCmd() *cobra.Command {
 
 			var val []byte
 			err = db.View(func(tx *bolt.Tx) error {
-				kf, err := resolveKeyFormat(tx, bucket, keyFormat)
+				key, err := resolveKey(tx, bucket, rawKey, keyFormat)
 				if err != nil {
 					return err
-				}
-				key, err := valuefmt.Decode(rawKey, kf)
-				if err != nil {
-					return fmt.Errorf("decode key: %w", err)
 				}
 
 				v, found := boltio.Get(tx, bucket, string(key))
@@ -259,30 +218,22 @@ func newPutCmd() *cobra.Command {
 		Short: "Write a value at bucket/key",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveDBPath(cmd)
-			if err != nil {
-				return err
-			}
 			bucket, rawKey, rawValue := args[0], args[1], args[2]
 
-			db, err := boltio.OpenWrite(path)
+			db, err := openWriteDB(cmd)
 			if err != nil {
 				return err
 			}
 			defer func() { _ = db.Close() }()
 
-			var kf valuefmt.Format
+			var key []byte
 			err = db.View(func(tx *bolt.Tx) error {
 				var err error
-				kf, err = resolveKeyFormat(tx, bucket, keyFormat)
+				key, err = resolveKey(tx, bucket, rawKey, keyFormat)
 				return err
 			})
 			if err != nil {
 				return err
-			}
-			key, err := valuefmt.Decode(rawKey, kf)
-			if err != nil {
-				return fmt.Errorf("decode key: %w", err)
 			}
 			vf, err := valuefmt.Parse(format)
 			if err != nil {
@@ -315,13 +266,9 @@ func newGetSchemaCmd() *cobra.Command {
 		Short: "Infer the field shape of a sample value in a bucket",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveDBPath(cmd)
-			if err != nil {
-				return err
-			}
 			bucket := args[0]
 
-			db, err := boltio.OpenRead(path)
+			db, err := openReadDB(cmd)
 			if err != nil {
 				return err
 			}
@@ -331,13 +278,9 @@ func newGetSchemaCmd() *cobra.Command {
 			err = db.View(func(tx *bolt.Tx) error {
 				var sampleKey string
 				if cmd.Flags().Changed("key") {
-					kf, err := resolveKeyFormat(tx, bucket, keyFormat)
+					decoded, err := resolveKey(tx, bucket, key, keyFormat)
 					if err != nil {
 						return err
-					}
-					decoded, err := valuefmt.Decode(key, kf)
-					if err != nil {
-						return fmt.Errorf("decode key: %w", err)
 					}
 					sampleKey = string(decoded)
 				}
@@ -471,13 +414,9 @@ func newPatchCmd() *cobra.Command {
 		Short: "Merge a JSON fragment into the JSON object stored at bucket/key (RFC 7396)",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveDBPath(cmd)
-			if err != nil {
-				return err
-			}
 			bucket, rawKey, fragment := args[0], args[1], args[2]
 
-			db, err := boltio.OpenWrite(path)
+			db, err := openWriteDB(cmd)
 			if err != nil {
 				return err
 			}
@@ -485,13 +424,9 @@ func newPatchCmd() *cobra.Command {
 
 			var key []byte
 			err = db.View(func(tx *bolt.Tx) error {
-				kf, err := resolveKeyFormat(tx, bucket, keyFormat)
+				decoded, err := resolveKey(tx, bucket, rawKey, keyFormat)
 				if err != nil {
 					return err
-				}
-				decoded, err := valuefmt.Decode(rawKey, kf)
-				if err != nil {
-					return fmt.Errorf("decode key: %w", err)
 				}
 				key = decoded
 
