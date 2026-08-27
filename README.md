@@ -13,6 +13,15 @@ It provides two layers:
   boot" problem when bouncing a local Portainer data directory between
   binary versions.
 
+## Install
+
+```sh
+go install github.com/chiptus/boltdb-cli@latest
+```
+
+This installs the latest tagged release to `$GOBIN` (or `$GOPATH/bin`).
+Pin a specific version with `@vX.Y.Z` instead of `@latest`.
+
 ## Safety
 
 Every write (`put`, `patch`, `portainer set-version`,
