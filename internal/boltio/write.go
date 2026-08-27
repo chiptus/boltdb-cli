@@ -34,20 +34,18 @@ type PutResult struct {
 	BackupPath string
 }
 
+// knownValue is what a caller already knows about the value currently
+// stored at a key, passed to putWithOld to avoid a redundant re-read.
+type knownValue struct {
+	Bytes []byte
+	Found bool
+}
+
 // Put writes value to bucket/key, creating the bucket if needed. Every write
 // is preceded by a timestamped backup of the file. Callers can preview the
 // change without writing via WriteOptions.DryRun, and every non-dry-run
 // write is confirmed interactively unless WriteOptions.Yes is set.
 func Put(db *bolt.DB, bucket, key string, value []byte, opts WriteOptions) (PutResult, error) {
-	out := opts.Out
-	if out == nil {
-		out = os.Stdout
-	}
-	in := opts.In
-	if in == nil {
-		in = os.Stdin
-	}
-
 	var oldValue []byte
 	var found bool
 	err := db.View(func(tx *bolt.Tx) error {
@@ -58,6 +56,22 @@ func Put(db *bolt.DB, bucket, key string, value []byte, opts WriteOptions) (PutR
 		return PutResult{}, err
 	}
 
+	return putWithOld(db, bucket, key, value, knownValue{Bytes: oldValue, Found: found}, opts)
+}
+
+// putWithOld is Put's implementation, taking the current value as old
+// instead of reading it itself — Patch already has it from resolving the
+// merge, so it calls this directly to avoid a second read of the same key.
+func putWithOld(db *bolt.DB, bucket, key string, value []byte, old knownValue, opts WriteOptions) (PutResult, error) {
+	out := opts.Out
+	if out == nil {
+		out = os.Stdout
+	}
+	in := opts.In
+	if in == nil {
+		in = os.Stdin
+	}
+
 	render := opts.Render
 	if render == nil {
 		render = func(v []byte) (string, error) { return string(v), nil }
@@ -66,8 +80,8 @@ func Put(db *bolt.DB, bucket, key string, value []byte, opts WriteOptions) (PutR
 	if _, err := fmt.Fprintf(out, "bucket=%q key=%q\n", bucket, key); err != nil {
 		return PutResult{}, err
 	}
-	if found {
-		oldRendered, err := render(oldValue)
+	if old.Found {
+		oldRendered, err := render(old.Bytes)
 		if err != nil {
 			return PutResult{}, fmt.Errorf("render old value: %w", err)
 		}

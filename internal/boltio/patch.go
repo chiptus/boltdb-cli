@@ -10,8 +10,9 @@ import (
 
 // Patch reads the JSON object stored at bucket/key, applies fragment to it
 // as an RFC 7396 JSON Merge Patch (a null value in fragment deletes the
-// corresponding key), and writes the merged result back through Put, so it
-// inherits the same backup/dry-run/confirmation safety net.
+// corresponding key), and writes the merged result back through Put's
+// implementation, so it inherits the same backup/dry-run/confirmation
+// safety net without re-reading the key Patch already read.
 func Patch(db *bolt.DB, bucket, key string, fragment []byte, opts WriteOptions) (PutResult, error) {
 	var current []byte
 	var found bool
@@ -38,7 +39,7 @@ func Patch(db *bolt.DB, bucket, key string, fragment []byte, opts WriteOptions) 
 		return PutResult{}, fmt.Errorf("apply patch: %w", err)
 	}
 
-	return Put(db, bucket, key, merged, opts)
+	return putWithOld(db, bucket, key, merged, knownValue{Bytes: current, Found: true}, opts)
 }
 
 // requireJSONObject returns an error if b is not valid JSON, or is valid
